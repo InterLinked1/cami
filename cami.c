@@ -549,7 +549,6 @@ static void ami_event_handle(char *data)
 
 #if 0
 			/* Wait for the consumer to finish using the event before we continue and potentially serve another event... */
-			// if we start trying to TX another event BEFORE we get here, that could be problematic though...
 			pthread_mutex_lock(&ami_read_lock);
 			/* Okay, at this point current_response should be NULL. (We're the only thread serving up responses) */
 			if (current_response) {
@@ -578,7 +577,6 @@ static void ami_event_handle(char *data)
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
 			event = ami_parse_event(data);
 			/* Provide the user with the original event, user is responsible for freeing */
-			//ami_dump_event(event);
 			ami_callback(event);
 		}
 		return;
