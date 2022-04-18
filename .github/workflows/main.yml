@@ -43,7 +43,7 @@ jobs:
           echo "secret=test" >> /etc/asterisk/manager.conf
           echo "read=all" >> /etc/asterisk/manager.conf
           echo "write=all" >> /etc/asterisk/manager.conf
-          /sbin/asterisk -rx "manager reload"
+          asterisk -rx "manager reload"
       - name: Build CAMI and execute simple demo
         run: |
           cd /usr/src
