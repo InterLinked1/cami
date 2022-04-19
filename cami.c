@@ -689,7 +689,6 @@ static int ami_wait_for_response(int msgid)
 	fds.fd = ami_read_pipe[0];
 	fds.events = POLLIN;
 
-	ami_debug("poll\n");
 	res = poll(&fds, 1, AMI_MAX_WAIT_TIME);
 	if (res < 0) {
 		if (errno != EINTR) {

@@ -81,7 +81,6 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 #endif
 		ami_resp_free(resp); /* Free response when done with it */
 	}
-	sleep(1);
 	ami_disconnect();
 	return 0;
 }
