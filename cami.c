@@ -103,13 +103,38 @@ static void ami_cleanup(void)
 	}
 }
 
+#ifdef AMI_EXTRA_DEBUG
+/*! \brief Replace carriage returns and newlines with R and N for (clearer) visible debugging */
+static void debug_string(const char *str)
+{
+	char *s, *dup = strdup(str);
+	if (!dup) {
+		return;
+	}
+	s = dup;
+	while (*s) {
+		if (*s == '\r') {
+			*s = 'R';
+		} else if (*s == '\n') {
+			*s = 'N';
+		}
+		s++;
+	}
+	ami_debug("Debugging string: '%s'\n", dup);
+	free(dup);
+}
+#endif
+
 static void *ami_loop(void *vargp)
 {
-	int res;
+	int res, got_id = 0, response_pending = 0;
 	/* It's incoming data (from Asterisk) that could be very large. Outgoing data (to Asterisk) is unlikely to be particularly large. */
 	char inbuf[AMI_BUFFER_SIZE];
+	char inbuf2[AMI_BUFFER_SIZE];
 	char outbuf[OUTBOUND_BUFFER_SIZE];
 	struct pollfd fds[2];
+	char *laststart, *readinbuf, *nextevent;
+	char *endofevent, *second;
 
 	if (ami_socket < 0) {
 		return NULL;
@@ -120,8 +145,10 @@ static void *ami_loop(void *vargp)
 	fds[1].fd = ami_pipe[0];
 	fds[1].events = POLLIN;
 
+	readinbuf = laststart = inbuf;
+
 	for (;;) {
-		res = poll(fds, 2, -1);
+		res = poll(fds, response_pending ? 1 : 2, -1); /* If we're in the middle of reading a response, don't accept any actions to send to Asterisk. */
 		pthread_testcancel();
 		if (res < 0) {
 			if (errno != EINTR) {
@@ -131,18 +158,99 @@ static void *ami_loop(void *vargp)
 		}
 		/* Data from AMI to deliver to consumer? */
 		if (fds[0].revents) {
-			res = recv(ami_socket, inbuf, AMI_BUFFER_SIZE - 2, 0);
+			res = recv(ami_socket, readinbuf, AMI_BUFFER_SIZE - 2, 0);
 			if (res < 1) {
 				break;
 			}
 			/* This prevents part of the last response from persisting in msg if that one was longer. */
 			/* We could memset(inbuf, '\0', AMI_BUFFER_SIZE), but even better: */
-			inbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 */
-			ami_event_handle(inbuf);
+			readinbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 */
+			nextevent = readinbuf;
+
+			/* It is completely possible that we finished reading from the socket but the current response isn't finished yet. */
+			if (got_id) { /* The initial ID from Asterisk that we've connected to AMI is the only thing we get that's not an event */
+				/* There are two problems we're concerned about:
+				 * One is we finish reading from the socket before we get the entire response (if it is a response).
+				 * Two is we read more than an entire event/response and we have multiple events on our hands.
+				 * Here, we try to address both of these potential issues that could arise.
+				 */
+				while ((endofevent = strstr(nextevent, AMI_EOM))) {
+					char next;
+					int starts_response = 0, middle_of_response = 0, end_of_response = 0;
+					endofevent += 4; /* This brings us to the end of a particular event. */
+					next = *endofevent; /* save the first char of the next event (if there is one, maybe this is the null terminator...) */
+					*endofevent = '\0'; /* Now let's pretend like this is the end. */
+
+					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
+
+					if (!starts_response) { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one! And it can't be the end, either. */
+						/* Whether this event is the Response bit or a plain Event, the SECOND line will have an ActionID, if it belongs to a response. */
+						second = strchr(nextevent, '\r');
+						if (second) {
+							/* Technically, it is slightly more efficient to do this check before we += 2 than right after, so do it now. */
+							*second = '\0';
+							if (strcasestr(nextevent, "Complete")) { /* If event name contains "Complete" (case insensitive), then this finishes a response. */
+								end_of_response = 1;
+							}
+							*second = '\r'; /* Restore */
+							second += 2;
+							/* No need to confirm events are all same ActionID. Exploit that we expect to receive a complete response before starting another. */
+							if (!strncmp(second, "ActionID:", 9)) {
+								middle_of_response = 1;
+							}
+						}
+					}
+					/* Now, figure out what we should do. */
+					if (!starts_response && !middle_of_response) {
+						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
+						ami_event_handle(laststart);
+						laststart = endofevent;
+						response_pending = 0;
+					} else if (end_of_response) { /* We just wrapped up a response. */
+						ami_event_handle(laststart);
+						laststart = endofevent;
+						response_pending = 0;
+					} else if (!loggedin) { /* Response to "Login" */
+						/* If we're not logged in, we can only ever get a single event. */
+						ami_event_handle(laststart); /* The "Login" response doesn't contain any events. If we see it, then send it on immediately. */
+						laststart = endofevent;
+						response_pending = 0;
+						if (!strncmp(laststart, "Response: Success", 17)) {
+							loggedin = 1; /* We can't actually wait for ami_action_login to set this flag. We need it to be 1 next time we loop (NOW). */
+						}
+					} else if (starts_response || middle_of_response) { /* We started and/or are in the middle of a response, but events remain. Keep going. */
+						response_pending = 1;
+					}
+					*endofevent = next; /* Restore what the last character really was. */
+					nextevent = endofevent; /* This is the beginning of the next event (if there is one) */
+				}
+				/* We finished processing all the events we just got. */
+				if (response_pending) { /* Incomplete, waiting for the end of this response */
+					int len;
+					/* Ouch... we started a response but didn't get the end of it yet... */
+					ami_debug("Asterisk left us high and dry for the end of the response, polling again...\n");
+					if (*nextevent) {
+						*nextevent = '\0'; /* prevent any string hanky panky here */
+					}
+					/* Shift the contents of the buffer, starting at our current head, to the beginning of the buffer. */
+					/* gripe: strncpy/strcpy will fill in the buffer with 0s, which feels to me like it violates the spirit of C. All I want is the null termination! */
+					len = strlen(laststart);
+					strncpy(inbuf2, laststart, len); /* SAFE. laststart is at most the size of inbuf/inbuf2. strcpy would also be perfectly safe. */
+					strncpy(inbuf, inbuf2, len); /* Okay, now copy it back to the original buffer, but specifically, back to the BEGINNING of the buffer. */
+					/* Okay, now we should have a little bit more room left in the buffer. */
+					readinbuf = inbuf + len; /* Start reading into the buffer at the first available space */
+					laststart = inbuf; /* The actual beginning of our data is at the very beginning of the buffer though, still! */
+				} else {
+					readinbuf = laststart = inbuf; /* We're good to start reading into the beginning of the buffer. */
+				}
+			} else {
+				ami_event_handle(laststart); /* This should only be Asterisk IDing itself to us. */
+				got_id = 1; /* Never execute this branch again during this connection. */
+			}
 		}
 		/* Data from consumer to deliver to AMI? */
 		if (fds[1].revents) {
-			/* Copy data on the pipe into the buffer */
+			/* Copy data on the pipe into the buffer. We wrote it all at once, so what's here should be what we send. */
 			res = read(ami_pipe[0], outbuf, sizeof(outbuf));
 			if (res < 1) {
 				ami_debug("read returned %d\n", res);
@@ -282,28 +390,6 @@ static int __ami_send(const char *fmt, ...)
 }
 #pragma GCC diagnostic pop
 
-#ifdef AMI_EXTRA_DEBUG
-/*! \brief Replace carriage returns and newlines with R and N for (clearer) visible debugging */
-static void debug_string(const char *str)
-{
-	char *s, *dup = strdup(str);
-	if (!dup) {
-		return;
-	}
-	s = dup;
-	while (*s) {
-		if (*s == '\r') {
-			*s = 'R';
-		} else if (*s == '\n') {
-			*s = 'N';
-		}
-		s++;
-	}
-	ami_debug("Debugging string: '%s'\n", dup);
-	free(dup);
-}
-#endif
-
 static struct ami_event *ami_parse_event(char *data)
 {
 	int i = 0;
@@ -378,7 +464,7 @@ static struct ami_response *ami_parse_response(char *data)
 
 	/* Events are delimited by two new lines */
 	while ((outer = strstr(dup2, AMI_EOM))) {
-		*outer = '\0';;
+		*outer = '\0';
 		resp->events[i] = ami_parse_event(dup2);
 		if (i == 0) {
 			const char *response;
@@ -461,7 +547,15 @@ const char *ami_keyvalue(struct ami_event *event, const char *key)
 static void ami_event_handle(char *data)
 {
 	if (rx++ == 0) { /* This is the first thing we received (probably Asterisk identifiying itself). */
-		ami_debug("*** Initialized Asterisk Manager Interface ***\n");
+		if (!strstr(data, "Asterisk")) {
+			ami_debug("Unexpected identification: '%s'\n", data);
+		} else {
+			/* Assume we're good to go. */
+			if (write(ami_read_pipe[1], "0", 2) < 1) { /* Add 1 for null terminator */
+				ami_debug("Couldn't write to read pipe?\n");
+			}
+			ami_debug("*** Initialized Asterisk Manager Interface: %s", data); /* No newline, Asterisk ID contains one */
+		}
 		return;
 	}
 	if (!strncmp(data, "Response:", 9)) {
@@ -595,6 +689,7 @@ static int ami_wait_for_response(int msgid)
 	fds.fd = ami_read_pipe[0];
 	fds.events = POLLIN;
 
+	ami_debug("poll\n");
 	res = poll(&fds, 1, AMI_MAX_WAIT_TIME);
 	if (res < 0) {
 		if (errno != EINTR) {
@@ -724,6 +819,13 @@ int ami_action_login(const char *username, const char *password)
 
 	/* Nobody sends anything else until we get our response. */
 	pthread_mutex_lock(&ami_read_lock);
+	/* Sometimes, if we're too eager, we can try to log in before the ID and that fails. */
+	/* So, wait until Asterisk IDs itself before we send login. */
+	res = ami_wait_for_response(ami_msg_id);
+	if (res) { /* Asterisk didn't ID itself? Abort. */
+		pthread_mutex_unlock(&ami_read_lock);
+		return -1;
+	}
 	/* Remember: no trailing \r\n !*/
 	if (ami_send("Login", "Username:%s\r\nSecret:%s", username, password)) {
 		ami_debug("Failed to send AMI action\n");
@@ -734,7 +836,6 @@ int ami_action_login(const char *username, const char *password)
 	res = ami_wait_for_response(ami_msg_id);
 	resp = current_response;
 	current_response = NULL; /* we're done with this guy... */
-	pthread_mutex_unlock(&ami_read_lock);
 	if (!res) {
 		if (!resp) {
 			ami_debug("BUG! Told we got a response, but can't find it?\n");
@@ -748,6 +849,8 @@ int ami_action_login(const char *username, const char *password)
 			ami_resp_free(resp); /* We don't need to do anything more with this. */
 		}
 	}
+	/* Unlike ami_action, we don't release read_lock until AFTER we process. */
+	pthread_mutex_unlock(&ami_read_lock);
 
 	return res;
 }
