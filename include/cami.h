@@ -20,7 +20,7 @@
 #define AMI_MAX_WAIT_TIME 500
 
 /* Currently, it is expected that any single AMI response fit within a single buffer, so responses larger than this may be truncated and corrupted. */
-#define AMI_BUFFER_SIZE 4096
+#define AMI_BUFFER_SIZE 1048576
 
 struct ami_field {
 	char *key;		/*!< AMI field key */
