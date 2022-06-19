@@ -158,13 +158,13 @@ static void *ami_loop(void *vargp)
 		}
 		/* Data from AMI to deliver to consumer? */
 		if (fds[0].revents) {
-			res = recv(ami_socket, readinbuf, AMI_BUFFER_SIZE - 2, 0);
+			res = recv(ami_socket, readinbuf, AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf), 0);
 			if (res < 1) {
 				break;
 			}
 			/* This prevents part of the last response from persisting in msg if that one was longer. */
 			/* We could memset(inbuf, '\0', AMI_BUFFER_SIZE), but even better: */
-			readinbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 */
+			readinbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf) */
 			nextevent = readinbuf;
 
 			/* It is completely possible that we finished reading from the socket but the current response isn't finished yet. */
@@ -252,6 +252,7 @@ static void *ami_loop(void *vargp)
 		if (fds[1].revents) {
 			/* Copy data on the pipe into the buffer. We wrote it all at once, so what's here should be what we send. */
 			res = read(ami_pipe[0], outbuf, sizeof(outbuf));
+			outbuf[res] = '\0'; /* We're only sending the right number of bytes, but null terminate for easy debugging to clearly delineate the end.*/
 			if (res < 1) {
 				ami_debug("read returned %d\n", res);
 				break;
