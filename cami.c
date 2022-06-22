@@ -754,7 +754,7 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 		*(back + 1) = '\0';
 	}
 
-	len = strlen(fmt) + strlen(action) + strlen(fmt) + 15;
+	len = 28 + strlen(fmt2) + 4 + 1; /* format string + fmt2 + AMI_EOM + null terminator */
 	buf = malloc(len);
 	if (!buf) {
 		free(fmt2);
