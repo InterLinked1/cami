@@ -35,8 +35,8 @@
 /*! \param chan Channel name */
 /*! \param exten Extension */
 /*! \param context Context */
-#define ami_action_axfer(chan, exten, context) ami-action("Atxfer", "Channel:%s\r\nExten:%s\r\nContext:%s", chan, exten, context)
+#define ami_action_axfer(chan, exten, context) ami_action("Atxfer", "Channel:%s\r\nExten:%s\r\nContext:%s", chan, exten, context)
 
 /*! \brief Cancel an attended transfer */
 /*! \param chan Channel name */
-#define ami_action_cancel_axfer(chan) ami-action("CancelAtxfer", "Channel:%s", chan)
+#define ami_action_cancel_axfer(chan) ami_action("CancelAtxfer", "Channel:%s", chan)
