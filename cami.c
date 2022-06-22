@@ -764,6 +764,15 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 	/* If we don't have a user-supplied format string, don't add \r\n after ActionID or we'll get 3 sets in a row and cause Asterisk to whine. */
 	snprintf(buf, len, "%s%s%s", *fmt2 ? "Action:%s\r\nActionID:%d\r\n" : "Action:%s\r\nActionID:%d", fmt2, AMI_EOM); /* Make our full format string */
 
+	/* Basic sanity checks for the format string we just wrote: ensure it ends in 2 returns + new lines, and nothing but 2 returns + new lines */
+	len = strlen(buf); /* Recalculate to get the actual length, rather than using the upper bound for snprintf. */
+	if (len > 4 && strcmp(buf + len - 4, AMI_EOM)) { /* Assert the message does indeed end in AMI_EOM */
+		/* Shouldn't happen if everything else is correct, but if message wasn't properly terminated, it won't get processed. */
+		ami_debug("BUG! AMI action wasn't properly terminated! AMI action %s will fail!\n", action); /* This means there's a bug somewhere else. */
+	} else if (len > 6 && !strncmp(buf + len - 6, "\r\n", 2)) { /* Ensure the message doesn't end in an inflated AMI_EOM */
+		ami_debug("BUG! Too many new lines terminating message.\n"); /* Won't cause AMI action to fail, but it will cause Asterisk to whine. */
+	}
+
 	/* Nobody sends anything else until we get our response. */
 	pthread_mutex_lock(&ami_read_lock);
 
