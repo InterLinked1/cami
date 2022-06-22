@@ -184,7 +184,7 @@ static void *ami_loop(void *vargp)
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 
 					if (!starts_response) { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one! And it can't be the end, either. */
-						/* Whether this event is the Response bit or a plain Event, the SECOND line will have an ActionID, if it belongs to a response. */
+						/* Whether this event is the Response bit or a plain Event, some line (NOT necessarily the 2nd) will have an ActionID, if it belongs to a response. */
 						second = strchr(nextevent, '\r');
 						if (second) {
 							/* Technically, it is slightly more efficient to do this check before we += 2 than right after, so do it now. */
@@ -195,7 +195,7 @@ static void *ami_loop(void *vargp)
 							*second = '\r'; /* Restore */
 							second += 2;
 							/* No need to confirm events are all same ActionID. Exploit that we expect to receive a complete response before starting another. */
-							if (!strncmp(second, "ActionID:", 9)) {
+							if (strstr(nextevent, "ActionID:")) {
 								middle_of_response = 1;
 							}
 						}
