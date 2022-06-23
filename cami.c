@@ -414,6 +414,12 @@ static struct ami_event *ami_parse_event(char *data)
 	dup2 = dup; /* You can NOT use strsep directly on a malloc'd pointer */
 
 	while ((outer = strsep(&dup2, "\n"))) {
+		if (!*outer || !*(outer + 1)) {
+			ami_debug("WARNING: Malformed AMI event! (contains empty line)\n");
+			/* Don't decrement event->size: we allocated that many fields, and we need to free them all. */
+			/* However, by skipping this we ensure any such unused fields are at the end of the struct. */
+			continue;
+		}
 		inner = strsep(&outer, ":");
 		if (*inner && inner[1]) { /* Don't do anything with the extra new lines at the end */
 			ltrim(inner); /* Eat any leading whitespace */
@@ -537,6 +543,16 @@ const char *ami_keyvalue(struct ami_event *event, const char *key)
 	const char *value = NULL;
 	int i;
 	for (i = 0; i < event->size; i++) {
+		if (!event->fields[i].key) {
+			/* Root cause is a poorly written Asterisk module that sent an empty key. We'll already have thrown a warning in this case.
+			 * We can't do anything much about it, because we already allocated space for N events, so if there's empty lines, we
+			 * won't actually use all N of them.
+			 * strcasecmp will crash if key is NULL so skip the comparison, since it's obviously not a match anyways.
+			 */
+
+			ami_debug("WARNING: Null key at index %d (searching for %s)\n", i, key);
+			continue;
+		}
 		if (!strcasecmp(key, event->fields[i].key)) {
 			value = event->fields[i].value;
 			break;
