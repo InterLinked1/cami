@@ -180,6 +180,14 @@ static void *ami_loop(void *vargp)
 
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 
+					if (starts_response) {
+						if (!strstr(nextevent, "Message:")) { /* looking for a field like Message: Events will follow */
+							/* Response is actually just a lone response... there aren't multiple events to follow */
+							starts_response = 0; /* Technically, it's the start, middle, AND end... but treat it like it's the end */
+							end_of_response = 1;
+						}
+					}
+
 					if (!starts_response) { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one! And it can't be the end, either. */
 						/* Whether this event is the Response bit or a plain Event, some line (NOT necessarily the 2nd) will have an ActionID, if it belongs to a response. */
 						second = strchr(nextevent, '\r');
