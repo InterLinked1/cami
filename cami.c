@@ -46,9 +46,6 @@
 #define AMI_RESPONSE_PREVIEW_SIZE 32
 #define OUTBOUND_BUFFER_SIZE 2048
 
-/*! \brief Allows using variadic arguments internally without going through ami_action first */
-#define ami_send(action, fmt, ...) __ami_send("Action:%s\r\nActionID:%d\r\n" fmt AMI_EOM, action, ++ami_msg_id, __VA_ARGS__)
-
 /*! \brief Simple logger, with second:millisecond, lineno display */
 #define ami_debug(fmt, ...) { \
 	struct timeval tv; \
@@ -363,33 +360,82 @@ void ami_set_debug(int fd)
 	debugfd = fd;
 }
 
-/*! \note I don't know why this causes gcc to whine... but this function DOES work correctly... */
-#pragma GCC diagnostic ignored "-Wsuggest-attribute=format"
-static int __ami_send(const char *fmt, ...)
+static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, const char *fmt, const char *prefmt, ...)
 {
 	int res = 0;
-	char *buf;
-	int len;
-	va_list ap;
+	int bytes = 0;
+	char *prebuf, *buf = NULL, *fullbuf;
+	int prelen, len = 0;
+	va_list preap;
 
-	va_start(ap, fmt);
-	if ((len = vasprintf(&buf, fmt, ap)) < 0) {
-		va_end(ap);
+	/* Action Name and ID */
+	va_start(preap, prefmt);
+	prelen = vasprintf(&prebuf, prefmt, preap);
+	va_end(preap);
+
+	if (prelen < 0) {
 		return -1;
 	}
-	va_end(ap);
-	ami_debug("==> AMI Action:\n%s", buf); /* There's already (multiple) new lines at the end, don't add more */
-	if (write(ami_pipe[1], buf, len) < 1) {
+
+	/* User variadic arguments */
+	if (fmt) {
+		if ((len = vasprintf(&buf, fmt, ap)) < 0) {
+			free(prebuf);
+			return -1;
+		}
+	}
+
+	fullbuf = malloc(prelen + len + sizeof(AMI_EOM) + 1);
+	if (!fullbuf) {
+		free(prebuf);
+		if (buf) {
+			free(buf);
+		}
+		return -1;
+	}
+
+	strcpy(fullbuf, prebuf); /* Safe */
+	if (buf) {
+		strcpy(fullbuf + prelen, buf); /* Safe */
+	}
+
+	/* User format strings should not end with \r\n. However, it's conceivable it could happen, and handle it if it does. */
+	if (prelen + len > 2 && !strncmp(fullbuf + prelen + len - 2, "\r\n", 2)) {
+		ami_debug("WARNING: User format string ends with \\r\\n. Fixing this, but please don't do this!\n");
+		/* We already have a partial finale, so only add half of it and hopefully now it's correct. */
+		/* Note: gcc whines about truncation if we copy 2 bytes of AMI_EOM using strncpy. So just hardcode it. */
+		strcpy(fullbuf + prelen + len, "\r\n"); /* Safe */
+		len = prelen + len + 2;
+		/* We should now have the correct ending. However, if there was more than one \r\n, then it's still going to fail. */
+	} else { /* Add the full finale */
+		strcpy(fullbuf + prelen + len, AMI_EOM); /* Safe */
+		len = prelen + len + 4; /* + length of AMI_EOM */
+	}
+
+	if (buf) {
+		free(buf);
+	}
+	free(prebuf);
+
+	if (len >= 4 && strncmp(fullbuf + len - 4, AMI_EOM, 4)) {
+		/* Shouldn't happen if everything else is correct, but if message wasn't properly terminated, it won't get processed. Fix it to force it to go through. */
+		ami_debug("Yikes! AMI action wasn't properly terminated!\n"); /* This means there's a bug somewhere else. */
+	}
+
+	ami_debug("==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
+	bytes = write(ami_pipe[1], fullbuf, len);
+	if (bytes < 1) {
 		ami_debug("Failed to write to pipe\n");
 		res = -1;
 	}
+
 	if (!res) {
 		tx++;
 	}
-	free(buf);
+
+	free(fullbuf);
 	return res;
 }
-#pragma GCC diagnostic pop
 
 static struct ami_event *ami_parse_event(char *data)
 {
@@ -740,12 +786,24 @@ static int ami_wait_for_response(int msgid)
 	}
 }
 
+static int ami_send(const char *action, const char *fmt, ...)
+{
+	int res;
+
+	va_list ap;
+	va_start(ap, fmt);
+	/* If we don't have a user-supplied format string, don't add \r\n after ActionID or we'll get 3 sets in a row and cause Asterisk to whine. */
+	res = __ami_send(ap, fmt, *fmt ? "Action:%s\r\nActionID:%d\r\n" : "Action:%s\r\nActionID:%d", action, ++ami_msg_id);
+	va_end(ap);
+
+	return res;
+}
+
 struct ami_response *ami_action(const char *action, const char *fmt, ...)
 {
 	struct ami_response *resp = NULL;
-	/* Remember: no trailing \r\n !*/
-	int res, len, actionid;
-	char *buf, *back, *fmt2;
+	/* Remember: no trailing \r\n in fmt !*/
+	int res, actionid;
 	va_list ap;
 
 	if (ami_socket < 0) {
@@ -759,46 +817,15 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 		return NULL;
 	}
 
-	/* Eliminate any trailing spacing at the end of fmt */
-	fmt2 = strdup(fmt);
-	if (!fmt2) {
-		return NULL;
-	}
-	back = fmt2 + strlen(fmt2);
-	while (back != fmt2 && isspace(*--back));
-	if (*fmt2) {
-		*(back + 1) = '\0';
-	}
-
-	len = 28 + strlen(fmt2) + 4 + 1; /* format string + fmt2 + AMI_EOM + null terminator */
-	buf = malloc(len);
-	if (!buf) {
-		free(fmt2);
-		return NULL;
-	}
-
-	/* If we don't have a user-supplied format string, don't add \r\n after ActionID or we'll get 3 sets in a row and cause Asterisk to whine. */
-	snprintf(buf, len, "%s%s%s", *fmt2 ? "Action:%s\r\nActionID:%d\r\n" : "Action:%s\r\nActionID:%d", fmt2, AMI_EOM); /* Make our full format string */
-
-	/* Basic sanity checks for the format string we just wrote: ensure it ends in 2 returns + new lines, and nothing but 2 returns + new lines */
-	len = strlen(buf); /* Recalculate to get the actual length, rather than using the upper bound for snprintf. */
-	if (len > 4 && strcmp(buf + len - 4, AMI_EOM)) { /* Assert the message does indeed end in AMI_EOM */
-		/* Shouldn't happen if everything else is correct, but if message wasn't properly terminated, it won't get processed. */
-		ami_debug("BUG! AMI action wasn't properly terminated! AMI action %s will fail!\n", action); /* This means there's a bug somewhere else. */
-	} else if (len > 6 && !strncmp(buf + len - 6, "\r\n", 2)) { /* Ensure the message doesn't end in an inflated AMI_EOM */
-		ami_debug("BUG! Too many new lines terminating message.\n"); /* Won't cause AMI action to fail, but it will cause Asterisk to whine. */
-	}
-
 	/* Nobody sends anything else until we get our response. */
 	pthread_mutex_lock(&ami_read_lock);
 
 	va_start(ap, fmt);
-	res = __ami_send(buf, action, ++ami_msg_id);
+	/* If we don't have a user-supplied format string, don't add \r\n after ActionID or we'll get 3 sets in a row and cause Asterisk to whine. */
+	res = __ami_send(ap, fmt, fmt && *fmt ? "Action:%s\r\nActionID:%d\r\n" : "Action:%s\r\nActionID:%d", action, ++ami_msg_id);
 	va_end(ap);
 
 	actionid = ami_msg_id; /* This is the ActionID we expect in our response */
-	free(buf);
-	free(fmt2);
 
 	if (res) {
 		ami_debug("Failed to send AMI action\n");
