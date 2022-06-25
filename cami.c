@@ -852,7 +852,7 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 		} else {
 			if (resp->actionid != actionid) {
 				/*! \note If we ever make it so multiple AMI responses can go out at once, this may need to be revisited... */
-				ami_debug("BUG! Expected ActionID %d in response, but got %d\n", actionid, current_response->actionid);
+				ami_debug("BUG! Expected ActionID %d in response, but got %d\n", actionid, resp->actionid);
 			} else if (!resp->success) {
 				/* We got a response, and it's telling us that we failed. */
 				ami_resp_free(resp); /* If we're not returning it to the user, free it now */
