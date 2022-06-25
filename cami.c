@@ -929,3 +929,33 @@ int ami_action_login(const char *username, const char *password)
 
 	return res;
 }
+
+char *ami_action_getvar(const char *variable, const char *channel)
+{
+	struct ami_response *resp;
+	const char *varval = NULL;
+
+	if (channel) {
+		resp = ami_action("Getvar", "Variable:%s\r\nChannel:%s", variable, channel);
+	} else {
+		resp = ami_action("Getvar", "Variable:%s", variable);
+	}
+	if (!resp) {
+		return NULL;
+	}
+	if (resp->size != 1) {
+		ami_debug("AMI action Getvar response returned %d events?\n", resp->size);
+		goto cleanup;
+	}
+
+	varval = ami_keyvalue(resp->events[0], "Value");
+	if (!varval || !*varval) {
+		goto cleanup;
+	}
+
+	varval = strdup(varval);
+
+cleanup:
+	ami_resp_free(resp);
+	return varval;
+}

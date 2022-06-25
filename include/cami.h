@@ -95,3 +95,10 @@ int ami_action_login(const char *username, const char *password);
 /*! \fmt Format string containing any action-specified AMI parameters, followed by your arguments (just like printf). Do NOT end with newlines. */
 /*! \note Do NOT include any kind of ActionID. This is handled internally. */
 struct ami_response *ami_action(const char *action, const char *fmt, ...);
+
+/*! \brief Get a variable */
+/*! \param variable Name of variable */
+/*! \param channel Channel name, or NULL to get a global variable */
+/*! \retval Variable value if it exists, NULL otherwise */
+/*! \note Caller is responsible for freeing returned string using free() if it is non-NULL */
+char *ami_action_getvar(const char *variable, const char *channel);
