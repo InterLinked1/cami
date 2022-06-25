@@ -181,7 +181,22 @@ static void *ami_loop(void *vargp)
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 
 					if (starts_response) {
-						if (!strstr(nextevent, "Message:")) { /* looking for a field like Message: Events will follow */
+						char *newline, *msgfielddup = NULL;
+						char *messagefield = strstr(nextevent, "Message:");
+						/* looking for a field like Message: Events will follow */
+						if (messagefield) {
+							msgfielddup = strdup(messagefield);
+							newline = strchr(msgfielddup, '\r');
+							if (newline) {
+								*newline = '\0';
+							}
+							if (!strstr(msgfielddup, "follow")) {
+								/* Response is actually just a lone response... there aren't multiple events to follow */
+								starts_response = 0;
+								end_of_response = 1;
+							}
+							free(msgfielddup);
+						} else {
 							/* Response is actually just a lone response... there aren't multiple events to follow */
 							starts_response = 0; /* Technically, it's the start, middle, AND end... but treat it like it's the end */
 							end_of_response = 1;
