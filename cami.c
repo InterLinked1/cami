@@ -933,7 +933,8 @@ int ami_action_login(const char *username, const char *password)
 char *ami_action_getvar(const char *variable, const char *channel)
 {
 	struct ami_response *resp;
-	const char *varval = NULL;
+	const char *varval;
+	char *varvaldup = NULL;
 
 	if (channel) {
 		resp = ami_action("Getvar", "Variable:%s\r\nChannel:%s", variable, channel);
@@ -950,12 +951,12 @@ char *ami_action_getvar(const char *variable, const char *channel)
 
 	varval = ami_keyvalue(resp->events[0], "Value");
 	if (!varval || !*varval) {
-		goto cleanup;
+		goto cleanup; /* Values are trimmed, so if it starts with NULL, there's nothing there */
 	}
 
-	varval = strdup(varval);
+	varvaldup = strdup(varval);
 
 cleanup:
 	ami_resp_free(resp);
-	return varval;
+	return varvaldup;
 }
