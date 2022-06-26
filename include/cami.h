@@ -102,3 +102,10 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...);
 /*! \retval Variable value if it exists, NULL otherwise */
 /*! \note Caller is responsible for freeing returned string using free() if it is non-NULL */
 char *ami_action_getvar(const char *variable, const char *channel);
+
+/*! \brief Set a variable */
+/*! \param variable Name of variable */
+/*! \param value Value of variable */
+/*! \param channel Channel name, or NULL to set a global variable */
+/*! \retval 0 on success, -1 on failure */
+int ami_action_setvar(const char *variable, const char *value, const char *channel);

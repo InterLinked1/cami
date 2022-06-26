@@ -960,3 +960,26 @@ cleanup:
 	ami_resp_free(resp);
 	return varvaldup;
 }
+
+int ami_action_setvar(const char *variable, const char *value, const char *channel)
+{
+	struct ami_response *resp;
+	int res = -1;
+
+	if (channel) {
+		resp = ami_action("Setvar", "Variable:%s\r\nValue:%s\r\nChannel:%s", variable, value, channel);
+	} else {
+		resp = ami_action("Setvar", "Variable:%s\r\nValue:%s", variable, value);
+	}
+	if (!resp) {
+		return -1;
+	}
+	if (resp->size != 1) {
+		ami_debug("AMI action Setvar response returned %d events?\n", resp->size);
+	} else {
+		res = resp->success;
+	}
+
+	ami_resp_free(resp);
+	return res;
+}
