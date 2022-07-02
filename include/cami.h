@@ -96,6 +96,11 @@ int ami_action_login(const char *username, const char *password);
 /*! \note Do NOT include any kind of ActionID. This is handled internally. */
 struct ami_response *ami_action(const char *action, const char *fmt, ...);
 
+/*! \brief See if an action was successful and discard the response. Useful if you only care if an action succeeded and don't need the raw response (typically for "set", not "get" operations). */
+/*! \param resp AMI response */
+/*! \note This frees resp so resp will no longer be a valid pointer after calling this function! */
+int ami_action_response_result(struct ami_response *resp);
+
 /*! \brief Get a variable */
 /*! \param variable Name of variable */
 /*! \param channel Channel name, or NULL to get a global variable */

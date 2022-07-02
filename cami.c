@@ -930,6 +930,23 @@ int ami_action_login(const char *username, const char *password)
 	return res;
 }
 
+int ami_action_response_result(struct ami_response *resp)
+{
+	int res = -1;
+
+	if (!resp) {
+		return -1;
+	}
+	if (resp->size != 1) {
+		ami_debug("AMI action response returned %d events?\n", resp->size);
+	} else {
+		res = resp->success ? 0 : -1;
+	}
+
+	ami_resp_free(resp);
+	return res;
+}
+
 char *ami_action_getvar(const char *variable, const char *channel)
 {
 	struct ami_response *resp;
@@ -971,15 +988,5 @@ int ami_action_setvar(const char *variable, const char *value, const char *chann
 	} else {
 		resp = ami_action("Setvar", "Variable:%s\r\nValue:%s", variable, value);
 	}
-	if (!resp) {
-		return -1;
-	}
-	if (resp->size != 1) {
-		ami_debug("AMI action Setvar response returned %d events?\n", resp->size);
-	} else {
-		res = resp->success;
-	}
-
-	ami_resp_free(resp);
-	return res;
+	return ami_action_response_result(resp);
 }
