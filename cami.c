@@ -978,15 +978,68 @@ cleanup:
 	return varvaldup;
 }
 
+int ami_action_getvar_buf(const char *variable, const char *channel, char *buf, size_t len)
+{
+	struct ami_response *resp;
+	const char *varval;
+	int res = -1;
+
+	*buf = '\0';
+
+	if (channel) {
+		resp = ami_action("Getvar", "Variable:%s\r\nChannel:%s", variable, channel);
+	} else {
+		resp = ami_action("Getvar", "Variable:%s", variable);
+	}
+	if (!resp) {
+		return res;
+	}
+	if (resp->size != 1) {
+		ami_debug("AMI action Getvar response returned %d events?\n", resp->size);
+		goto cleanup;
+	}
+
+	varval = ami_keyvalue(resp->events[0], "Value");
+	if (!varval || !*varval) {
+		goto cleanup; /* Values are trimmed, so if it starts with NULL, there's nothing there */
+	}
+
+	strncpy(buf, varval, len);
+	res = 0;
+
+cleanup:
+	ami_resp_free(resp);
+	return res;
+}
+
 int ami_action_setvar(const char *variable, const char *value, const char *channel)
 {
 	struct ami_response *resp;
-	int res = -1;
 
 	if (channel) {
 		resp = ami_action("Setvar", "Variable:%s\r\nValue:%s\r\nChannel:%s", variable, value, channel);
 	} else {
 		resp = ami_action("Setvar", "Variable:%s\r\nValue:%s", variable, value);
 	}
+	return ami_action_response_result(resp);
+}
+
+int ami_action_originate_exten(const char *dest, const char *context, const char *exten, int priority, const char *callerid)
+{
+	struct ami_response *resp;
+
+	if (callerid) {
+		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d\r\nCallerID:%s", dest, context, exten, priority, callerid);
+	} else {
+		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d", dest, context, exten, priority);
+	}
+	return ami_action_response_result(resp);
+}
+
+int ami_action_redirect(const char *channel, const char *context, const char *exten, int priority)
+{
+	struct ami_response *resp;
+
+	resp = ami_action("Redirect", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d", channel, context, exten, priority);
 	return ami_action_response_result(resp);
 }

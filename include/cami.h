@@ -98,6 +98,7 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...);
 
 /*! \brief See if an action was successful and discard the response. Useful if you only care if an action succeeded and don't need the raw response (typically for "set", not "get" operations). */
 /*! \param resp AMI response */
+/*! \retval 0 if the response indicated success, -1 if it indicated failure */
 /*! \note This frees resp so resp will no longer be a valid pointer after calling this function! */
 int ami_action_response_result(struct ami_response *resp);
 
@@ -108,9 +109,34 @@ int ami_action_response_result(struct ami_response *resp);
 /*! \note Caller is responsible for freeing returned string using free() if it is non-NULL */
 char *ami_action_getvar(const char *variable, const char *channel);
 
+/*! \brief Get a variable */
+/*! \param variable Name of variable */
+/*! \param channel Channel name, or NULL to get a global variable */
+/*! \param buf Buffer */
+/*! \param len Buffer size */
+/*! \retval 0 on success, -1 on failure */
+int ami_action_getvar_buf(const char *variable, const char *channel, char *buf, size_t len);
+
 /*! \brief Set a variable */
 /*! \param variable Name of variable */
 /*! \param value Value of variable */
 /*! \param channel Channel name, or NULL to set a global variable */
 /*! \retval 0 on success, -1 on failure */
 int ami_action_setvar(const char *variable, const char *value, const char *channel);
+
+/*! \brief Originate a call to an extension */
+/*! \param dest Channel destination */
+/*! \param context */
+/*! \param exten */
+/*! \param priority */
+/*! \param callerid Caller ID if desired, or NULL for none */
+/*! \retval 0 on success, -1 on failure */
+int ami_action_originate_exten(const char *dest, const char *context, const char *exten, int priority, const char *callerid);
+
+/*! \brief Redirect a channel */
+/*! \param channel Channel name */
+/*! \param context */
+/*! \param exten */
+/*! \param priority */
+/*! \retval 0 on success, -1 on failure */
+int ami_action_redirect(const char *channel, const char *context, const char *exten, int priority);
