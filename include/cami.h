@@ -131,7 +131,7 @@ int ami_action_setvar(const char *variable, const char *value, const char *chann
 /*! \param priority */
 /*! \param callerid Caller ID if desired, or NULL for none */
 /*! \retval 0 on success, -1 on failure */
-int ami_action_originate_exten(const char *dest, const char *context, const char *exten, int priority, const char *callerid);
+int ami_action_originate_exten(const char *dest, const char *context, const char *exten, const char *priority, const char *callerid);
 
 /*! \brief Redirect a channel */
 /*! \param channel Channel name */
@@ -139,4 +139,4 @@ int ami_action_originate_exten(const char *dest, const char *context, const char
 /*! \param exten */
 /*! \param priority */
 /*! \retval 0 on success, -1 on failure */
-int ami_action_redirect(const char *channel, const char *context, const char *exten, int priority);
+int ami_action_redirect(const char *channel, const char *context, const char *exten, const char *priority);

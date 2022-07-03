@@ -1024,22 +1024,22 @@ int ami_action_setvar(const char *variable, const char *value, const char *chann
 	return ami_action_response_result(resp);
 }
 
-int ami_action_originate_exten(const char *dest, const char *context, const char *exten, int priority, const char *callerid)
+int ami_action_originate_exten(const char *dest, const char *context, const char *exten, const char *priority, const char *callerid)
 {
 	struct ami_response *resp;
 
 	if (callerid) {
-		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d\r\nCallerID:%s", dest, context, exten, priority, callerid);
+		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s\r\nCallerID:%s", dest, context, exten, priority, callerid);
 	} else {
-		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d", dest, context, exten, priority);
+		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s", dest, context, exten, priority);
 	}
 	return ami_action_response_result(resp);
 }
 
-int ami_action_redirect(const char *channel, const char *context, const char *exten, int priority)
+int ami_action_redirect(const char *channel, const char *context, const char *exten, const char *priority)
 {
 	struct ami_response *resp;
 
-	resp = ami_action("Redirect", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%d", channel, context, exten, priority);
+	resp = ami_action("Redirect", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s", channel, context, exten, priority);
 	return ami_action_response_result(resp);
 }
