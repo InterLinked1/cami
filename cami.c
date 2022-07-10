@@ -64,11 +64,12 @@
 	} \
 }
 
-static pthread_t ami_thread;
+static pthread_t ami_thread, dispatch_thread;
 static int ami_socket = -1;
 static int debugfd = -1;
 static int ami_pipe[2];	/* Pipe for sending actions to Asterisk */
 static int ami_read_pipe[2];	/* Pipe for reading action responses from Asterisk */
+static int ami_event_pipe[2];	/* Pipe for dispatching events to user callback functions */
 static void (*ami_callback)(struct ami_event *event);
 static void (*disconnected_callback)(void);
 
@@ -81,7 +82,8 @@ static int tx;
 static int rx;
 static int ami_msg_id;
 
-/* Forward declaration */
+/* Forward declarations */
+static void *ami_event_dispatch(void *varg);
 static void ami_event_handle(char *data);
 
 static void ami_cleanup(void)
@@ -91,6 +93,8 @@ static void ami_cleanup(void)
 	close(ami_pipe[1]);
 	close(ami_read_pipe[0]);
 	close(ami_read_pipe[1]);
+	close(ami_event_pipe[0]);
+	close(ami_event_pipe[1]);
 	ami_socket = -1;
 	loggedin = 0;
 	tx = rx = 0;
@@ -315,6 +319,10 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		ami_debug("Unable to create pipe: %s\n", strerror(errno));
 		return -1;
 	}
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_event_pipe)) {
+		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		return -1;
+	}
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -344,6 +352,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	}
 
 	pthread_create(&ami_thread, NULL, ami_loop, NULL);
+	pthread_create(&dispatch_thread, NULL, ami_event_dispatch, NULL);
 
 	return 0;
 }
@@ -353,9 +362,14 @@ int ami_disconnect(void)
 	if (ami_socket < 0) {
 		return -1;
 	}
+
 	pthread_cancel(ami_thread);
+	pthread_cancel(dispatch_thread);
 	pthread_kill(ami_thread, SIGURG);
+	pthread_kill(dispatch_thread, SIGURG);
 	pthread_join(ami_thread, NULL);
+	pthread_join(dispatch_thread, NULL);
+
 	if (ami_socket >= 0) {
 		ami_debug("Since we killed the AMI connection, manually cleaning up\n");
 		ami_cleanup();
@@ -615,6 +629,46 @@ const char *ami_keyvalue(struct ami_event *event, const char *key)
 	return value;
 }
 
+/*! \brief Separate thread to dispatch AMI events by executing user callback functions
+ * so as not to block the main loop thread. This is necessary as if there is recursion
+ * (i.e. callback function calls an AMI action), we then deadlock until the response
+ * timeout expires because the main thread is blocked on the callback function. Solved
+ * by not executing user callback functions in the main thread. */
+static void *ami_event_dispatch(void *varg)
+{
+	struct pollfd fds;
+	struct ami_event *event;
+	int res;
+	char buf[AMI_BUFFER_SIZE];
+
+	fds.fd = ami_event_pipe[0];
+	fds.events = POLLIN;
+
+	for (;;) {
+		res = poll(&fds, 1, -1);
+		if (res < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			ami_debug("Exiting event dispatcher: %s\n", strerror(errno));
+			break;
+		}
+		if (res) {
+			if (read(ami_event_pipe[0], buf, AMI_BUFFER_SIZE) < 1) {
+				ami_debug("read pipe failed?\n");
+				break;
+			}
+			event = ami_parse_event(buf);
+			/* Provide the user with the original event, user is responsible for freeing */
+			ami_callback(event);
+		}
+	}
+
+	ami_debug("Event dispatch thread exiting\n");
+
+	return NULL;
+}
+
 static void ami_event_handle(char *data)
 {
 	if (rx++ == 0) { /* This is the first thing we received (probably Asterisk identifiying itself). */
@@ -739,10 +793,12 @@ static void ami_event_handle(char *data)
 		/* A single, unsolicited event (not in response to an action) */
 		ami_debug("<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
 		if (ami_callback) {
+			int bytes;
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
-			event = ami_parse_event(data);
-			/* Provide the user with the original event, user is responsible for freeing */
-			ami_callback(event);
+			bytes = write(ami_event_pipe[1], data, strlen(data));
+			if (bytes < 1) {
+				ami_debug("Failed to write to pipe\n");
+			}
 		}
 		return;
 	}
