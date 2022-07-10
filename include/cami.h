@@ -17,7 +17,7 @@
  */
 
 /* Max wait time in ms. Don't be tempted to make this too big, as this blocks all AMI traffic. Most of the time, it shouldn't really matter though. */
-#define AMI_MAX_WAIT_TIME 500
+#define AMI_MAX_WAIT_TIME 1000
 
 /* Currently, it is expected that any single AMI response fit within a single buffer, so responses larger than this may be truncated and corrupted. */
 #define AMI_BUFFER_SIZE 1048576
