@@ -789,7 +789,6 @@ static void ami_event_handle(char *data)
 #endif
 		}
 	} else {
-		struct ami_event *event;
 		/* A single, unsolicited event (not in response to an action) */
 		ami_debug("<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
 		if (ami_callback) {
