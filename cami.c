@@ -86,15 +86,20 @@ static int ami_msg_id;
 static void *ami_event_dispatch(void *varg);
 static void ami_event_handle(char *data);
 
-static void ami_cleanup(void)
+static void close_pipes(void)
 {
-	close(ami_socket);
 	close(ami_pipe[0]);
 	close(ami_pipe[1]);
 	close(ami_read_pipe[0]);
 	close(ami_read_pipe[1]);
 	close(ami_event_pipe[0]);
 	close(ami_event_pipe[1]);
+}
+
+static void ami_cleanup(void)
+{
+	close(ami_socket);
+	close_pipes();
 	ami_socket = -1;
 	loggedin = 0;
 	tx = rx = 0;
@@ -332,16 +337,23 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_read_pipe)) {
 		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		close(ami_pipe[0]);
+		close(ami_pipe[1]);
 		return -1;
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_event_pipe)) {
 		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		close(ami_pipe[0]);
+		close(ami_pipe[1]);
+		close(ami_read_pipe[0]);
+		close(ami_read_pipe[1]);
 		return -1;
 	}
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
 		ami_debug("%s\n", strerror(errno));
+		close_pipes();
 		return -1;
 	}
 	inet_pton(AF_INET, hostname, &(saddr.sin_addr));
@@ -349,6 +361,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	saddr.sin_port = htons(port); /* use network order */
 	if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
 		ami_debug("%s\n", strerror(errno));
+		close_pipes();
 		return -1;
 	}
 	ami_socket = fd;
