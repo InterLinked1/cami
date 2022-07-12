@@ -166,7 +166,13 @@ static void *ami_loop(void *vargp)
 			/* This prevents part of the last response from persisting in msg if that one was longer. */
 			/* We could memset(inbuf, '\0', AMI_BUFFER_SIZE), but even better: */
 			readinbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf) */
-			nextevent = readinbuf;
+
+			/* laststart, not readinbuf, because if it takes multiple reads to get a full event,
+			 * we don't have a full event yet so we won't execute the while loop below at all.
+			 * However, eventually we will get the end of the event, and then we need to start
+			 * from the beginning of the event, which could have been obtained a previous read,
+			 * so using readinbuf (which is what we got THIS read) is WRONG. */
+			nextevent = laststart;
 
 			/* It is completely possible that we finished reading from the socket but the current response isn't finished yet. */
 			if (got_id) { /* The initial ID from Asterisk that we've connected to AMI is the only thing we get that's not an event */
