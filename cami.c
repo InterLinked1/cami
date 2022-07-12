@@ -217,6 +217,9 @@ static void *ami_loop(void *vargp)
 					}
 					/* Now, figure out what we should do. */
 					if (!starts_response && !middle_of_response) {
+						if (response_pending && !end_of_response) {
+							ami_debug("BUG! Failed to detect end of response?\n");
+						}
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
 						ami_event_handle(laststart);
 						laststart = endofevent;
