@@ -253,7 +253,7 @@ static void *ami_loop(void *vargp)
 					strncpy(inbuf2, laststart, len); /* SAFE. laststart is at most the size of inbuf/inbuf2. strcpy would also be perfectly safe. */
 					strncpy(inbuf, inbuf2, len); /* Okay, now copy it back to the original buffer, but specifically, back to the BEGINNING of the buffer. */
 					/* Okay, now we should have a little bit more room left in the buffer. */
-					laststart = inbuf; /* The actual beginning of our data is at the very beginning of the buffer though, still! */
+					lasteventstart = laststart = inbuf; /* The actual beginning of our data is at the very beginning of the buffer though, still! */
 					readinbuf = inbuf + len; /* Start reading into the buffer at the first available space */
 				} else {
 					readinbuf = lasteventstart = laststart = inbuf; /* We're good to start reading into the beginning of the buffer. */
