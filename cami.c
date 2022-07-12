@@ -140,7 +140,7 @@ static void *ami_loop(void *vargp)
 	char outbuf[OUTBOUND_BUFFER_SIZE];
 	struct pollfd fds[2];
 	char *laststart, *lasteventstart, *readinbuf, *nextevent;
-	char *endofevent, *second;
+	char *endofevent;
 
 	if (ami_socket < 0) {
 		return NULL;
@@ -195,29 +195,21 @@ static void *ami_loop(void *vargp)
 
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 					if (starts_response) {
-						char *eventlist = strstr(nextevent, "EventList:");
 						ami_debug("Got start of response... (%s)\n", nextevent);
 						/* If there's an EventList field, it's a multi-event response. If not, it's not. */
-						if (!eventlist) {
+						if (!strstr(nextevent, "EventList: start")) {
 							/* Response is actually just a lone response... there aren't multiple events to follow */
 							starts_response = 0; /* Technically, it's the start, middle, AND end... but treat it like it's the end */
 							end_of_response = 1;
 						}
-					} else { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one! And it can't be the end, either. */
-						/* Whether this event is the Response bit or a plain Event, some line (NOT necessarily the 2nd) will have an ActionID, if it belongs to a response. */
-						second = strchr(nextevent, '\r');
-						if (second) {
-							/* Technically, it is slightly more efficient to do this check before we += 2 than right after, so do it now. */
-							*second = '\0';
-							if (strcasestr(nextevent, "Complete")) { /* If event name contains "Complete" (case insensitive), then this finishes a response. */
-								end_of_response = 1;
-							}
-							*second = '\r'; /* Restore */
-							second += 2;
-							/* No need to confirm events are all same ActionID. Exploit that we expect to receive a complete response before starting another. */
-							if (strstr(nextevent, "ActionID:")) {
-								middle_of_response = 1;
-							}
+					} else { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one!. */
+						if (strstr(nextevent, "EventList: Complete")) {
+							end_of_response = 1;
+						}
+						/* Whether this event is the Response bit or a plain Event, some line (NOT necessarily the 2nd)
+						 * will have an ActionID, if it belongs to a response. */
+						if (strstr(nextevent, "ActionID:")) {
+							middle_of_response = 1;
 						}
 					}
 					/* Now, figure out what we should do. */
