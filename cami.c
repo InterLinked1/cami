@@ -134,7 +134,7 @@ static void *ami_loop(void *vargp)
 	char inbuf2[AMI_BUFFER_SIZE];
 	char outbuf[OUTBOUND_BUFFER_SIZE];
 	struct pollfd fds[2];
-	char *laststart, *readinbuf, *nextevent;
+	char *laststart, *lasteventstart, *readinbuf, *nextevent;
 	char *endofevent, *second;
 
 	if (ami_socket < 0) {
@@ -146,7 +146,7 @@ static void *ami_loop(void *vargp)
 	fds[1].fd = ami_pipe[0];
 	fds[1].events = POLLIN;
 
-	readinbuf = laststart = inbuf;
+	readinbuf = lasteventstart = laststart = inbuf;
 
 	for (;;) {
 		res = poll(fds, response_pending ? 1 : 2, -1); /* If we're in the middle of reading a response, don't accept any actions to send to Asterisk. */
@@ -167,12 +167,12 @@ static void *ami_loop(void *vargp)
 			/* We could memset(inbuf, '\0', AMI_BUFFER_SIZE), but even better: */
 			readinbuf[res] = '\0'; /* Won't be out of bounds, since we only read max AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf) */
 
-			/* laststart, not readinbuf, because if it takes multiple reads to get a full event,
+			/* lasteventstart, not readinbuf, because if it takes multiple reads to get a full event,
 			 * we don't have a full event yet so we won't execute the while loop below at all.
 			 * However, eventually we will get the end of the event, and then we need to start
 			 * from the beginning of the event, which could have been obtained a previous read,
 			 * so using readinbuf (which is what we got THIS read) is WRONG. */
-			nextevent = laststart;
+			nextevent = lasteventstart;
 
 			/* It is completely possible that we finished reading from the socket but the current response isn't finished yet. */
 			if (got_id) { /* The initial ID from Asterisk that we've connected to AMI is the only thing we get that's not an event */
@@ -237,7 +237,7 @@ static void *ami_loop(void *vargp)
 						response_pending = 1;
 					}
 					*endofevent = next; /* Restore what the last character really was. */
-					nextevent = endofevent; /* This is the beginning of the next event (if there is one) */
+					lasteventstart = nextevent = endofevent; /* This is the beginning of the next event (if there is one) */
 				}
 				/* We finished processing all the events we just got. */
 				if (response_pending) { /* Incomplete, waiting for the end of this response */
@@ -253,10 +253,10 @@ static void *ami_loop(void *vargp)
 					strncpy(inbuf2, laststart, len); /* SAFE. laststart is at most the size of inbuf/inbuf2. strcpy would also be perfectly safe. */
 					strncpy(inbuf, inbuf2, len); /* Okay, now copy it back to the original buffer, but specifically, back to the BEGINNING of the buffer. */
 					/* Okay, now we should have a little bit more room left in the buffer. */
-					readinbuf = inbuf + len; /* Start reading into the buffer at the first available space */
 					laststart = inbuf; /* The actual beginning of our data is at the very beginning of the buffer though, still! */
+					readinbuf = inbuf + len; /* Start reading into the buffer at the first available space */
 				} else {
-					readinbuf = laststart = inbuf; /* We're good to start reading into the beginning of the buffer. */
+					readinbuf = lasteventstart = laststart = inbuf; /* We're good to start reading into the beginning of the buffer. */
 				}
 			} else {
 				ami_event_handle(laststart); /* This should only be Asterisk IDing itself to us. */
