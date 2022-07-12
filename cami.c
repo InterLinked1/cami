@@ -250,9 +250,12 @@ static void *ami_loop(void *vargp)
 					/* Shift the contents of the buffer, starting at our current head, to the beginning of the buffer. */
 					/* gripe: strncpy/strcpy will fill in the buffer with 0s, which feels to me like it violates the spirit of C. All I want is the null termination! */
 					len = strlen(laststart);
-					strncpy(inbuf2, laststart, len); /* SAFE. laststart is at most the size of inbuf/inbuf2. strcpy would also be perfectly safe. */
-					strncpy(inbuf, inbuf2, len); /* Okay, now copy it back to the original buffer, but specifically, back to the BEGINNING of the buffer. */
-					/* Okay, now we should have a little bit more room left in the buffer. */
+					if (laststart != inbuf) { /* Don't needlessly strcpy unless that actually achieves anything. */
+						/* If the logical head of our buffer is past the beginning, shift it back to the beginning. */
+						strncpy(inbuf2, laststart, len); /* SAFE. laststart is at most the size of inbuf/inbuf2. strcpy would also be perfectly safe. */
+						strncpy(inbuf, inbuf2, len); /* Okay, now copy it back to the original buffer, but specifically, back to the BEGINNING of the buffer. */
+						/* Okay, now we should have a little bit more room left in the buffer. */
+					}
 					lasteventstart = laststart = inbuf; /* The actual beginning of our data is at the very beginning of the buffer though, still! */
 					readinbuf = inbuf + len; /* Start reading into the buffer at the first available space */
 				} else {
