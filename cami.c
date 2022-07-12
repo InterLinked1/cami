@@ -222,16 +222,16 @@ static void *ami_loop(void *vargp)
 						}
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
 						ami_event_handle(laststart);
-						laststart = endofevent;
+						lasteventstart = laststart = endofevent;
 						response_pending = 0;
 					} else if (end_of_response) { /* We just wrapped up a response. */
 						ami_event_handle(laststart);
-						laststart = endofevent;
+						lasteventstart = laststart = endofevent;
 						response_pending = 0;
 					} else if (!loggedin) { /* Response to "Login" */
 						/* If we're not logged in, we can only ever get a single event. */
 						ami_event_handle(laststart); /* The "Login" response doesn't contain any events. If we see it, then send it on immediately. */
-						laststart = endofevent;
+						lasteventstart = laststart = endofevent;
 						response_pending = 0;
 						if (!strncmp(laststart, "Response: Success", 17)) {
 							loggedin = 1; /* We can't actually wait for ami_action_login to set this flag. We need it to be 1 next time we loop (NOW). */
@@ -247,9 +247,12 @@ static void *ami_loop(void *vargp)
 					int len;
 					/* Ouch... we started a response but didn't get the end of it yet... */
 					ami_debug("Asterisk left us high and dry for the end of the response, polling again...\n");
+#if 0
 					if (*nextevent) {
+						/* Don't do this: this will actually just terminate some responses so we miss the completion event (see Issue #4) */
 						*nextevent = '\0'; /* prevent any string hanky panky here */
 					}
+#endif
 					/* Shift the contents of the buffer, starting at our current head, to the beginning of the buffer. */
 					/* gripe: strncpy/strcpy will fill in the buffer with 0s, which feels to me like it violates the spirit of C. All I want is the null termination! */
 					len = strlen(laststart);
