@@ -674,10 +674,12 @@ static void *ami_event_dispatch(void *varg)
 			break;
 		}
 		if (res) {
-			if (read(ami_event_pipe[0], buf, AMI_BUFFER_SIZE) < 1) {
+			res = read(ami_event_pipe[0], buf, AMI_BUFFER_SIZE - 1);
+			if (res < 1) {
 				ami_debug("read pipe failed?\n");
 				break;
 			}
+			buf[res] = '\0';
 			event = ami_parse_event(buf);
 			/* Provide the user with the original event, user is responsible for freeing */
 			ami_callback(event);
