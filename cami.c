@@ -133,7 +133,7 @@ static void debug_string(const char *str)
 
 static void *ami_loop(void *vargp)
 {
-	int res, got_id = 0, response_pending = 0;
+	int res, got_id = 0, response_pending = 0, event_pending = 0;
 	/* It's incoming data (from Asterisk) that could be very large. Outgoing data (to Asterisk) is unlikely to be particularly large. */
 	char inbuf[AMI_BUFFER_SIZE];
 	char inbuf2[AMI_BUFFER_SIZE];
@@ -154,7 +154,7 @@ static void *ami_loop(void *vargp)
 	readinbuf = lasteventstart = laststart = inbuf;
 
 	for (;;) {
-		res = poll(fds, response_pending ? 1 : 2, -1); /* If we're in the middle of reading a response, don't accept any actions to send to Asterisk. */
+		res = poll(fds, event_pending || response_pending ? 1 : 2, -1); /* If we're in the middle of reading a response, don't accept any actions to send to Asterisk. */
 		pthread_testcancel();
 		if (res < 0) {
 			if (errno != EINTR) {
@@ -220,27 +220,43 @@ static void *ami_loop(void *vargp)
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
 						ami_event_handle(laststart);
 						lasteventstart = laststart = endofevent;
-						response_pending = 0;
+						event_pending = response_pending = 0;
 					} else if (end_of_response) { /* We just wrapped up a response. */
 						ami_event_handle(laststart);
 						lasteventstart = laststart = endofevent;
-						response_pending = 0;
+						event_pending = response_pending = 0;
 					} else if (!loggedin) { /* Response to "Login" */
 						/* If we're not logged in, we can only ever get a single event. */
 						ami_event_handle(laststart); /* The "Login" response doesn't contain any events. If we see it, then send it on immediately. */
 						lasteventstart = laststart = endofevent;
-						response_pending = 0;
+						event_pending = response_pending = 0;
 						if (!strncmp(laststart, "Response: Success", 17)) {
 							loggedin = 1; /* We can't actually wait for ami_action_login to set this flag. We need it to be 1 next time we loop (NOW). */
 						}
 					} else if (starts_response || middle_of_response) { /* We started and/or are in the middle of a response, but events remain. Keep going. */
 						response_pending = 1;
+						event_pending = 0; /* Only relevant if !response_pending, anyways */
 					}
 					*endofevent = next; /* Restore what the last character really was. */
 					lasteventstart = nextevent = endofevent; /* This is the beginning of the next event (if there is one) */
 				}
+
+				/* XXX This is kind of a kludge. Apparently sometimes we'll get a Response: line, and that's it, and ActionID the next line.
+				 * Without this, because we're not aware a response is pending yet, we'll execute the !response_pending branch below,
+				 * which will set lasteventstart to the current buffer position, overwriting what we just read ("Response:")
+				 * This kludge is complete because if we check for this first line, then response_pending will be true afterwards
+				 * so we'll execute the right branch if that happens again, and not overwrite what we just read. */
+				if (!event_pending && *nextevent) {
+					ami_debug("WARNING: Empty line in event?\n");
+					event_pending = 1;
+				} else
+				if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
+					ami_debug("WARNING: Empty line in response event?\n");
+					response_pending = 1;
+				}
+
 				/* We finished processing all the events we just got. */
-				if (response_pending) { /* Incomplete, waiting for the end of this response */
+				if (response_pending || event_pending) { /* Incomplete, waiting for the end of this response */
 					int len;
 					/* Ouch... we started a response but didn't get the end of it yet... */
 					ami_debug("Asterisk left us high and dry for the end of the response, polling again...\n");
