@@ -249,8 +249,8 @@ static void *ami_loop(void *vargp)
 				if (!event_pending && *nextevent) {
 					ami_debug("WARNING: Empty line in event?\n");
 					event_pending = 1;
-				} else
-				if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
+				} else if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
+					/* In theory, not necessary? (covered by previous branch?) */
 					ami_debug("WARNING: Empty line in response event?\n");
 					response_pending = 1;
 				}
