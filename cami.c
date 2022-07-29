@@ -53,6 +53,7 @@
 	if (debugfd != -1) dprintf(debugfd, "%llu:%03lu : %d : " fmt, (((long long)tv.tv_sec)), (tv.tv_usec/1000), __LINE__, ## __VA_ARGS__); \
 }
 
+#define strlen_zero(s) ((!s || *s == '\0'))
 #define ltrim(s) while (isspace(*s)) s++;
 #define rtrim(s) { \
 	if (s) { \
@@ -1106,6 +1107,19 @@ int ami_action_originate_exten(const char *dest, const char *context, const char
 {
 	struct ami_response *resp;
 
+	if (strlen_zero(context)) {
+		ami_debug("Missing context\n");
+		return -1;
+	}
+	if (strlen_zero(exten)) {
+		ami_debug("Missing exten\n");
+		return -1;
+	}
+	if (strlen_zero(priority)) {
+		ami_debug("Missing priority\n");
+		return -1;
+	}
+
 	if (callerid) {
 		resp = ami_action("Originate", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s\r\nCallerID:%s", dest, context, exten, priority, callerid);
 	} else {
@@ -1117,6 +1131,19 @@ int ami_action_originate_exten(const char *dest, const char *context, const char
 int ami_action_redirect(const char *channel, const char *context, const char *exten, const char *priority)
 {
 	struct ami_response *resp;
+
+	if (strlen_zero(context)) {
+		ami_debug("Missing context\n");
+		return -1;
+	}
+	if (strlen_zero(exten)) {
+		ami_debug("Missing exten\n");
+		return -1;
+	}
+	if (strlen_zero(priority)) {
+		ami_debug("Missing priority\n");
+		return -1;
+	}
 
 	resp = ami_action("Redirect", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s", channel, context, exten, priority);
 	return ami_action_response_result(resp);
