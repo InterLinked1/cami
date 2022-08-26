@@ -143,6 +143,8 @@ static void *ami_loop(void *vargp)
 	char *laststart, *lasteventstart, *readinbuf, *nextevent;
 	char *endofevent;
 
+	(void) vargp; /* Unused argument. */
+
 	if (ami_socket < 0) {
 		return NULL;
 	}
@@ -677,6 +679,8 @@ static void *ami_event_dispatch(void *varg)
 	struct ami_event *event;
 	int res;
 	char buf[AMI_BUFFER_SIZE];
+
+	(void) varg; /* Unused argument. */
 
 	fds.fd = ami_event_pipe[0];
 	fds.events = POLLIN;
