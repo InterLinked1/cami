@@ -317,23 +317,14 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	struct sockaddr_in saddr;
 
 	if (ami_socket >= 0) {
-		/* Should pretty much NEVER happen on a clean cleanup */
+		/* Should pretty much NEVER happen on a clean cleanup
+		 * WILL happen if we reconnect from the disconnect callback */
 		ami_debug("Hmm... socket already registered?\n");
-		/* Maybe we just exited and we got started up again before cleanup could finish. */
-		usleep(100); /* I dunno how many CPU cycles "return NULL" takes, but this oughta be plenty... */
-		if (ami_socket >= 0) {
-			ami_debug("Socket still registered...\n");
-			/*
-			 * If we wanted to be really mean, we could return -1 now
-			 * But instead we'll just continue and overwrite everything.
-			 * It'll be okay... it doesn't *really* matter...
-			 * It just means that somebody probably called ami_connect twice
-			 * without disconnecting inbetween...
-			 *
-			 * Just kidding!
-			 */
-			return -1;
-		}
+		/*
+		 * Just continue and overwrite everything.
+		 * It just means that somebody probably called ami_connect twice
+		 * without disconnecting inbetween...
+		 */
 	}
 
 	memset(&saddr, 0, sizeof(saddr));
