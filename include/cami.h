@@ -140,3 +140,8 @@ int ami_action_originate_exten(const char *dest, const char *context, const char
 /*! \param priority */
 /*! \retval 0 on success, -1 on failure */
 int ami_action_redirect(const char *channel, const char *context, const char *exten, const char *priority);
+
+/*! \brief Reload a module */
+/*! \param module Full name of module to reload */
+/*! \retval 0 on success, -1 on failure */
+int ami_action_reload(const char *module);

@@ -1143,3 +1143,16 @@ int ami_action_redirect(const char *channel, const char *context, const char *ex
 	resp = ami_action("Redirect", "Channel:%s\r\nContext:%s\r\nExten:%s\r\nPriority:%s", channel, context, exten, priority);
 	return ami_action_response_result(resp);
 }
+
+int ami_action_reload(const char *module)
+{
+	struct ami_response *resp;
+
+	if (strlen_zero(module)) {
+		ami_debug("Missing module\n");
+		return -1;
+	}
+
+	resp = ami_action("Reload", "Module:%s", module);
+	return ami_action_response_result(resp);
+}
