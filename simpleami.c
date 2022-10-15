@@ -55,6 +55,7 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 	struct ami_response *resp = NULL;
 #if 0
 	ami_set_debug(STDERR_FILENO); /* Not recommended for daemon programs */
+	ami_set_debug_level(1);
 #endif
 	if (ami_connect(hostname, 0, simple_callback, simple_disconnect_callback)) {
 		return -1;
