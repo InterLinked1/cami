@@ -47,10 +47,12 @@
 #define OUTBOUND_BUFFER_SIZE 2048
 
 /*! \brief Simple logger, with second:millisecond, lineno display */
-#define ami_debug(fmt, ...) { \
-	struct timeval tv; \
-	gettimeofday(&tv, NULL); \
-	if (debugfd != -1) dprintf(debugfd, "%llu:%03lu : %d : " fmt, (((long long)tv.tv_sec)), (tv.tv_usec/1000), __LINE__, ## __VA_ARGS__); \
+#define ami_debug(level, fmt, ...) { \
+	if (debug_level >= level) { \
+		struct timeval tv; \
+		gettimeofday(&tv, NULL); \
+		if (debugfd != -1) dprintf(debugfd, "%llu:%03lu : %d : " fmt, (((long long)tv.tv_sec)), (tv.tv_usec/1000), __LINE__, ## __VA_ARGS__); \
+	} \
 }
 
 #define strlen_zero(s) ((!s || *s == '\0'))
@@ -68,6 +70,7 @@
 static pthread_t ami_thread, dispatch_thread;
 static int ami_socket = -1;
 static int debugfd = -1;
+static int debug_level = 0;
 static int ami_pipe[2];	/* Pipe for sending actions to Asterisk */
 static int ami_read_pipe[2];	/* Pipe for reading action responses from Asterisk */
 static int ami_event_pipe[2];	/* Pipe for dispatching events to user callback functions */
@@ -127,7 +130,7 @@ static void debug_string(const char *str)
 		}
 		s++;
 	}
-	ami_debug("Debugging string: '%s'\n", dup);
+	ami_debug(5, "Debugging string: '%s'\n", dup);
 	free(dup);
 }
 #endif
@@ -161,7 +164,7 @@ static void *ami_loop(void *vargp)
 		pthread_testcancel();
 		if (res < 0) {
 			if (errno != EINTR) {
-				ami_debug("poll returned error: %s\n", strerror(errno));
+				ami_debug(1, "poll returned error: %s\n", strerror(errno));
 			}
 			continue;
 		}
@@ -198,7 +201,7 @@ static void *ami_loop(void *vargp)
 
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 					if (starts_response) {
-						ami_debug("Got start of response... (%s)\n", nextevent);
+						ami_debug(7, "Got start of response... (%s)\n", nextevent);
 						/* If there's an EventList field, it's a multi-event response. If not, it's not. */
 						if (!strstr(nextevent, "EventList: start")) {
 							/* Response is actually just a lone response... there aren't multiple events to follow */
@@ -218,7 +221,7 @@ static void *ami_loop(void *vargp)
 					/* Now, figure out what we should do. */
 					if (!starts_response && !middle_of_response) {
 						if (response_pending && !end_of_response) {
-							ami_debug("BUG! Failed to detect end of response?\n");
+							ami_debug(1, "BUG! Failed to detect end of response?\n");
 						}
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
 						ami_event_handle(laststart);
@@ -250,11 +253,11 @@ static void *ami_loop(void *vargp)
 				 * This kludge is complete because if we check for this first line, then response_pending will be true afterwards
 				 * so we'll execute the right branch if that happens again, and not overwrite what we just read. */
 				if (!event_pending && *nextevent) {
-					ami_debug("WARNING: Empty line in event?\n");
+					ami_debug(1, "WARNING: Empty line in event?\n");
 					event_pending = 1;
 				} else if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
 					/* In theory, not necessary? (covered by previous branch?) */
-					ami_debug("WARNING: Empty line in response event?\n");
+					ami_debug(1, "WARNING: Empty line in response event?\n");
 					response_pending = 1;
 				}
 
@@ -262,7 +265,7 @@ static void *ami_loop(void *vargp)
 				if (response_pending || event_pending) { /* Incomplete, waiting for the end of this response */
 					int len;
 					/* Ouch... we started a response but didn't get the end of it yet... */
-					ami_debug("Asterisk left us high and dry for the end of the response, polling again...\n");
+					ami_debug(4, "Asterisk left us high and dry for the end of the response, polling again...\n");
 #if 0
 					if (*nextevent) {
 						/* Don't do this: this will actually just terminate some responses so we miss the completion event (see Issue #4) */
@@ -294,12 +297,12 @@ static void *ami_loop(void *vargp)
 			res = read(ami_pipe[0], outbuf, sizeof(outbuf));
 			outbuf[res] = '\0'; /* We're only sending the right number of bytes, but null terminate for easy debugging to clearly delineate the end.*/
 			if (res < 1) {
-				ami_debug("read returned %d\n", res);
+				ami_debug(1, "read returned %d\n", res);
 				break;
 			}
 			res = write(ami_socket, outbuf, res);
 			if (res < 1) {
-				ami_debug("write returned %d\n", res);
+				ami_debug(1, "write returned %d\n", res);
 				break;
 			}
 		}
@@ -319,7 +322,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	if (ami_socket >= 0) {
 		/* Should pretty much NEVER happen on a clean cleanup
 		 * WILL happen if we reconnect from the disconnect callback */
-		ami_debug("Hmm... socket already registered?\n");
+		ami_debug(1, "Hmm... socket already registered?\n");
 		/*
 		 * Just continue and overwrite everything.
 		 * It just means that somebody probably called ami_connect twice
@@ -334,17 +337,17 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 
 	/* If we can't make a pipe, forget about the socket. */
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_pipe)) {
-		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
 		return -1;
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_read_pipe)) {
-		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
 		close(ami_pipe[0]);
 		close(ami_pipe[1]);
 		return -1;
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_event_pipe)) {
-		ami_debug("Unable to create pipe: %s\n", strerror(errno));
+		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
 		close(ami_pipe[0]);
 		close(ami_pipe[1]);
 		close(ami_read_pipe[0]);
@@ -354,7 +357,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
-		ami_debug("%s\n", strerror(errno));
+		ami_debug(1, "%s\n", strerror(errno));
 		close_pipes();
 		return -1;
 	}
@@ -362,7 +365,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	saddr.sin_family = AF_INET;
 	saddr.sin_port = htons(port); /* use network order */
 	if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
-		ami_debug("%s\n", strerror(errno));
+		ami_debug(1, "%s\n", strerror(errno));
 		close_pipes();
 		return -1;
 	}
@@ -401,7 +404,7 @@ int ami_disconnect(void)
 	pthread_join(dispatch_thread, NULL);
 
 	if (ami_socket >= 0) {
-		ami_debug("Since we killed the AMI connection, manually cleaning up\n");
+		ami_debug(2, "Since we killed the AMI connection, manually cleaning up\n");
 		ami_cleanup();
 	}
 	return 0;
@@ -410,6 +413,16 @@ int ami_disconnect(void)
 void ami_set_debug(int fd)
 {
 	debugfd = fd;
+}
+
+int ami_set_debug_level(int level)
+{
+	int old_level = debug_level;
+	if (level < 0 || level > 10) {
+		return -1;
+	}
+	debug_level = level;
+	return old_level;
 }
 
 static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, const char *fmt, const char *prefmt, ...)
@@ -453,7 +466,7 @@ static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, co
 
 	/* User format strings should not end with \r\n. However, it's conceivable it could happen, and handle it if it does. */
 	if (prelen + len > 2 && !strncmp(fullbuf + prelen + len - 2, "\r\n", 2)) {
-		ami_debug("WARNING: User format string ends with \\r\\n. Fixing this, but please don't do this!\n");
+		ami_debug(1, "WARNING: User format string ends with \\r\\n. Fixing this, but please don't do this!\n");
 		/* We already have a partial finale, so only add half of it and hopefully now it's correct. */
 		/* Note: gcc whines about truncation if we copy 2 bytes of AMI_EOM using strncpy. So just hardcode it. */
 		strcpy(fullbuf + prelen + len, "\r\n"); /* Safe */
@@ -471,13 +484,13 @@ static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, co
 
 	if (len >= 4 && strncmp(fullbuf + len - 4, AMI_EOM, 4)) {
 		/* Shouldn't happen if everything else is correct, but if message wasn't properly terminated, it won't get processed. Fix it to force it to go through. */
-		ami_debug("Yikes! AMI action wasn't properly terminated!\n"); /* This means there's a bug somewhere else. */
+		ami_debug(1, "Yikes! AMI action wasn't properly terminated!\n"); /* This means there's a bug somewhere else. */
 	}
 
-	ami_debug("==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
+	ami_debug(5, "==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
 	bytes = write(ami_pipe[1], fullbuf, len);
 	if (bytes < 1) {
-		ami_debug("Failed to write to pipe\n");
+		ami_debug(1, "Failed to write to pipe\n");
 		res = -1;
 	}
 
@@ -513,7 +526,7 @@ static struct ami_event *ami_parse_event(char *data)
 
 	while ((outer = strsep(&dup2, "\n"))) {
 		if (!*outer || !*(outer + 1)) {
-			ami_debug("WARNING: Malformed AMI event! (contains empty line)\n");
+			ami_debug(1, "WARNING: Malformed AMI event! (contains empty line)\n");
 			/* Don't decrement event->size: we allocated that many fields, and we need to free them all. */
 			/* However, by skipping this we ensure any such unused fields are at the end of the struct. */
 			continue;
@@ -579,7 +592,7 @@ static struct ami_response *ami_parse_response(char *data)
 			resp->success = !strcasecmp(response, "Success") ? 1 : 0;
 		} else {
 			if (resp->events[i]->actionid && resp->actionid != resp->events[i]->actionid) {
-				ami_debug("BUG! Expected ActionID %d but event has %d\n", resp->actionid, resp->events[i]->actionid);
+				ami_debug(1, "BUG! Expected ActionID %d but event has %d\n", resp->actionid, resp->events[i]->actionid);
 			}
 		}
 		dup2 = outer;
@@ -648,7 +661,7 @@ const char *ami_keyvalue(struct ami_event *event, const char *key)
 			 * strcasecmp will crash if key is NULL so skip the comparison, since it's obviously not a match anyways.
 			 */
 
-			ami_debug("WARNING: Null key at index %d (searching for %s)\n", i, key);
+			ami_debug(1, "WARNING: Null key at index %d (searching for %s)\n", i, key);
 			continue;
 		}
 		if (!strcasecmp(key, event->fields[i].key)) {
@@ -682,13 +695,13 @@ static void *ami_event_dispatch(void *varg)
 			if (errno == EINTR) {
 				continue;
 			}
-			ami_debug("Exiting event dispatcher: %s\n", strerror(errno));
+			ami_debug(3, "Exiting event dispatcher: %s\n", strerror(errno));
 			break;
 		}
 		if (res) {
 			res = read(ami_event_pipe[0], buf, AMI_BUFFER_SIZE - 1);
 			if (res < 1) {
-				ami_debug("read pipe failed?\n");
+				ami_debug(1, "read pipe failed?\n");
 				break;
 			}
 			buf[res] = '\0';
@@ -698,7 +711,7 @@ static void *ami_event_dispatch(void *varg)
 		}
 	}
 
-	ami_debug("Event dispatch thread exiting\n");
+	ami_debug(2, "Event dispatch thread exiting\n");
 
 	return NULL;
 }
@@ -707,13 +720,13 @@ static void ami_event_handle(char *data)
 {
 	if (rx++ == 0) { /* This is the first thing we received (probably Asterisk identifiying itself). */
 		if (!strstr(data, "Asterisk")) {
-			ami_debug("Unexpected identification: '%s'\n", data);
+			ami_debug(1, "Unexpected identification: '%s'\n", data);
 		} else {
 			/* Assume we're good to go. */
 			if (write(ami_read_pipe[1], "0", 2) < 1) { /* Add 1 for null terminator */
-				ami_debug("Couldn't write to read pipe?\n");
+				ami_debug(1, "Couldn't write to read pipe?\n");
 			}
-			ami_debug("*** Initialized Asterisk Manager Interface: %s", data); /* No newline, Asterisk ID contains one */
+			ami_debug(2, "*** Initialized Asterisk Manager Interface: %s", data); /* No newline, Asterisk ID contains one */
 		}
 		return;
 	}
@@ -730,16 +743,16 @@ static void ami_event_handle(char *data)
 		 */
 		struct ami_response *resp;
 		/* Response to an action, containing 1 or more events */
-		ami_debug("<== AMI Response: %.*s...\n", AMI_RESPONSE_PREVIEW_SIZE, data); /* Only show a preview of the first "chunk", since it could be large... */
+		ami_debug(5, "<== AMI Response: %.*s...\n", AMI_RESPONSE_PREVIEW_SIZE, data); /* Only show a preview of the first "chunk", since it could be large... */
 		resp = ami_parse_response(data);
 		if (!resp) {
-			ami_debug("Failed to parse response?\n");
+			ami_debug(1, "Failed to parse response?\n");
 		} else if (resp->size < 1) {
-			ami_debug("Size is %d?\n", resp->size);
+			ami_debug(1, "Size is %d?\n", resp->size);
 			ami_resp_free(resp);
 		} else if (resp->actionid != ami_msg_id) {
 			/* No need to check that resp->actionid is nonzero. Every response has an ActionID in the response. */
-			ami_debug("Received response with ActionID %d, but we expected %d\n", resp->actionid, ami_msg_id);
+			ami_debug(1, "Received response with ActionID %d, but we expected %d\n", resp->actionid, ami_msg_id);
 		} else {
 			char buf[AMI_MAX_ACTIONID_STRLEN];
 			snprintf(buf, AMI_MAX_ACTIONID_STRLEN, "%d", resp->actionid);
@@ -747,12 +760,12 @@ static void ami_event_handle(char *data)
 			/* Don't try to lock ami_read_lock until AFTER we write to the pipe, or we'll cause deadlock. */
 			if (current_response) {
 				/* Could indicate a bug, but not necessarily... perhaps the consumer just forgot about it? */
-				ami_debug("Found a response still active? Somebody's getting his lunch stolen...\n");
+				ami_debug(1, "Found a response still active? Somebody's getting his lunch stolen...\n");
 				current_response = NULL;
 			}
 			current_response = resp;
 			if (write(ami_read_pipe[1], buf, strlen(buf) + 1) < 1) { /* Add 1 for null terminator */
-				ami_debug("Couldn't write to read pipe?\n");
+				ami_debug(1, "Couldn't write to read pipe?\n");
 			}
 
 			/*
@@ -805,32 +818,32 @@ static void ami_event_handle(char *data)
 			pthread_mutex_lock(&ami_read_lock);
 			/* Okay, at this point current_response should be NULL. (We're the only thread serving up responses) */
 			if (current_response) {
-				ami_debug("BUG! current_response was %p immediately after lock acquired?\n", current_response);
+				ami_debug(1, "BUG! current_response was %p immediately after lock acquired?\n", current_response);
 			}
 			pthread_mutex_unlock(&ami_read_lock);
 #else
 			if (!pthread_mutex_trylock(&ami_read_lock)) {
 				if (current_response) {
-					ami_debug("BUG! current_response was %p immediately after lock acquired?\n", current_response);
+					ami_debug(1, "BUG! current_response was %p immediately after lock acquired?\n", current_response);
 				}
 				pthread_mutex_unlock(&ami_read_lock);
 			}
 #if EXTRA_DEBUG
 			else {
-				ami_debug("Could not acquire ami_read_lock just for fun, another thread beat us to it...\n");
+				ami_debug(1, "Could not acquire ami_read_lock just for fun, another thread beat us to it...\n");
 			}
 #endif
 #endif
 		}
 	} else {
 		/* A single, unsolicited event (not in response to an action) */
-		ami_debug("<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
+		ami_debug(5, "<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
 		if (ami_callback) {
 			int bytes;
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
 			bytes = write(ami_event_pipe[1], data, strlen(data));
 			if (bytes < 1) {
-				ami_debug("Failed to write to pipe\n");
+				ami_debug(1, "Failed to write to pipe\n");
 			}
 		}
 		return;
@@ -852,16 +865,16 @@ static int ami_wait_for_response(int msgid)
 	res = poll(&fds, 1, AMI_MAX_WAIT_TIME);
 	if (res < 0) {
 		if (errno != EINTR) {
-			ami_debug("poll returned error: %s\n", strerror(errno));
+			ami_debug(1, "poll returned error: %s\n", strerror(errno));
 		} else {
-			ami_debug("poll returned something else: %s\n", strerror(errno));
+			ami_debug(1, "poll returned something else: %s\n", strerror(errno));
 		}
 		return -1;
 	} else if (!res) { /* Nothing happened */
-		ami_debug("Didn't receive any AMI response within %d ms?\n", AMI_MAX_WAIT_TIME);
+		ami_debug(1, "Didn't receive any AMI response within %d ms?\n", AMI_MAX_WAIT_TIME);
 		if (current_response) {
 			/* Chances of this happening are almost nil, but it could happen... maybe? */
-			ami_debug("Okay, weird, we must have missed it before...\n");
+			ami_debug(1, "Okay, weird, we must have missed it before...\n");
 			return 0;
 		}
 		return -1;
@@ -869,16 +882,16 @@ static int ami_wait_for_response(int msgid)
 		int eventnum;
 		char buf[AMI_MAX_ACTIONID_STRLEN];
 		if (read(ami_read_pipe[0], buf, AMI_MAX_ACTIONID_STRLEN) < 1) {
-			ami_debug("read pipe failed?\n");
+			ami_debug(1, "read pipe failed?\n");
 			return -1;
 		}
 		eventnum = atoi(buf);
 		if (msgid != eventnum) {
-			ami_debug("Strange... got event %d, not %d\n", eventnum, msgid);
+			ami_debug(1, "Strange... got event %d, not %d\n", eventnum, msgid);
 		}
 		return 0;
 	} else {
-		ami_debug("How'd I get here?\n");
+		ami_debug(1, "How'd I get here?\n");
 		return -1;
 	}
 }
@@ -905,12 +918,12 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 
 	if (ami_socket < 0) {
 		/* Connection got shutdown */
-		ami_debug("Can't send AMI action without active socket\n");
+		ami_debug(1, "Can't send AMI action without active socket\n");
 		return NULL;
 	}
 	if (!loggedin) {
 		/* Silly you! You can't use AMI if you're not logged in... */
-		ami_debug("Requested AMI action but not yet logged in?\n");
+		ami_debug(1, "Requested AMI action but not yet logged in?\n");
 		return NULL;
 	}
 
@@ -925,7 +938,7 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 	actionid = ami_msg_id; /* This is the ActionID we expect in our response */
 
 	if (res) {
-		ami_debug("Failed to send AMI action\n");
+		ami_debug(1, "Failed to send AMI action\n");
 		pthread_mutex_unlock(&ami_read_lock);
 		return NULL; /* Failed to send */
 	}
@@ -937,11 +950,11 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 	pthread_mutex_unlock(&ami_read_lock);
 	if (!res) {
 		if (!resp) {
-			ami_debug("BUG! Told we got a response, but can't find it?\n");
+			ami_debug(1, "BUG! Told we got a response, but can't find it?\n");
 		} else {
 			if (resp->actionid != actionid) {
 				/*! \note If we ever make it so multiple AMI responses can go out at once, this may need to be revisited... */
-				ami_debug("BUG! Expected ActionID %d in response, but got %d\n", actionid, resp->actionid);
+				ami_debug(1, "BUG! Expected ActionID %d in response, but got %d\n", actionid, resp->actionid);
 			} else if (!resp->success) {
 				/* We got a response, and it's telling us that we failed. */
 				ami_resp_free(resp); /* If we're not returning it to the user, free it now */
@@ -962,7 +975,7 @@ int ami_action_login(const char *username, const char *password)
 		/* Chance of us getting booted between when established the connection
 		 * and now are basically nil, but check anyways, just in case.
 		 */
-		ami_debug("AMI socket closed before we could try to log in\n");
+		ami_debug(1, "AMI socket closed before we could try to log in\n");
 		return -1;
 	}
 
@@ -977,7 +990,7 @@ int ami_action_login(const char *username, const char *password)
 	}
 	/* Remember: no trailing \r\n !*/
 	if (ami_send("Login", "Username:%s\r\nSecret:%s", username, password)) {
-		ami_debug("Failed to send AMI action\n");
+		ami_debug(1, "Failed to send AMI action\n");
 		pthread_mutex_unlock(&ami_read_lock);
 		return -1; /* Failed to send */
 	}
@@ -987,7 +1000,7 @@ int ami_action_login(const char *username, const char *password)
 	current_response = NULL; /* we're done with this guy... */
 	if (!res) {
 		if (!resp) {
-			ami_debug("BUG! Told we got a response, but can't find it?\n");
+			ami_debug(1, "BUG! Told we got a response, but can't find it?\n");
 		} else {
 			if (!resp->success) {
 				/* We got a response, and it's telling us that we failed. */
@@ -1012,7 +1025,7 @@ int ami_action_response_result(struct ami_response *resp)
 		return -1;
 	}
 	if (resp->size != 1) {
-		ami_debug("AMI action response returned %d events?\n", resp->size);
+		ami_debug(1, "AMI action response returned %d events?\n", resp->size);
 	} else {
 		res = resp->success ? 0 : -1;
 	}
@@ -1036,7 +1049,7 @@ char *ami_action_getvar(const char *variable, const char *channel)
 		return NULL;
 	}
 	if (resp->size != 1) {
-		ami_debug("AMI action Getvar response returned %d events?\n", resp->size);
+		ami_debug(1, "AMI action Getvar response returned %d events?\n", resp->size);
 		goto cleanup;
 	}
 
@@ -1069,7 +1082,7 @@ int ami_action_getvar_buf(const char *variable, const char *channel, char *buf, 
 		return res;
 	}
 	if (resp->size != 1) {
-		ami_debug("AMI action Getvar response returned %d events?\n", resp->size);
+		ami_debug(1, "AMI action Getvar response returned %d events?\n", resp->size);
 		goto cleanup;
 	}
 
@@ -1103,15 +1116,15 @@ int ami_action_originate_exten(const char *dest, const char *context, const char
 	struct ami_response *resp;
 
 	if (strlen_zero(context)) {
-		ami_debug("Missing context\n");
+		ami_debug(1, "Missing context\n");
 		return -1;
 	}
 	if (strlen_zero(exten)) {
-		ami_debug("Missing exten\n");
+		ami_debug(1, "Missing exten\n");
 		return -1;
 	}
 	if (strlen_zero(priority)) {
-		ami_debug("Missing priority\n");
+		ami_debug(1, "Missing priority\n");
 		return -1;
 	}
 
@@ -1128,15 +1141,15 @@ int ami_action_redirect(const char *channel, const char *context, const char *ex
 	struct ami_response *resp;
 
 	if (strlen_zero(context)) {
-		ami_debug("Missing context\n");
+		ami_debug(1, "Missing context\n");
 		return -1;
 	}
 	if (strlen_zero(exten)) {
-		ami_debug("Missing exten\n");
+		ami_debug(1, "Missing exten\n");
 		return -1;
 	}
 	if (strlen_zero(priority)) {
-		ami_debug("Missing priority\n");
+		ami_debug(1, "Missing priority\n");
 		return -1;
 	}
 
@@ -1149,7 +1162,7 @@ int ami_action_reload(const char *module)
 	struct ami_response *resp;
 
 	if (strlen_zero(module)) {
-		ami_debug("Missing module\n");
+		ami_debug(1, "Missing module\n");
 		return -1;
 	}
 

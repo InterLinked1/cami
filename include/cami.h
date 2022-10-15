@@ -46,6 +46,12 @@ struct ami_response {
 /*! \note This is not recommended for use in production, but may be helpful in a dev environment. */
 void ami_set_debug(int fd);
 
+/*! \brief Set debug logging level */
+/*! \param level Level between 0 and 10. 0 will disable logging, 10 is the most granular. Default is 0. */
+/*! \note A log level of 1 is recommended for production use: this will log all errors and warnings. Use a greater log level for debugging. */
+/*! \retval -1 on failure, non-negative old log level otherwise */
+int ami_set_debug_level(int level);
+
 /*! \brief Initialize an AMI connection with Asterisk */
 /*! \param hostname Hostname (use 127.0.0.1 for localhost) */
 /*! \param port Port number. Use 0 for the default port (5038) */
