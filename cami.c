@@ -328,6 +328,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		 * It just means that somebody probably called ami_connect twice
 		 * without disconnecting inbetween...
 		 */
+		ami_disconnect(); /* Disconnect to prevent a resource leak */
 	}
 
 	memset(&saddr, 0, sizeof(saddr));
@@ -361,15 +362,15 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		close_pipes();
 		return -1;
 	}
+	ami_socket = fd;
 	inet_pton(AF_INET, hostname, &(saddr.sin_addr));
 	saddr.sin_family = AF_INET;
 	saddr.sin_port = htons(port); /* use network order */
 	if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
 		ami_debug(1, "%s\n", strerror(errno));
-		close_pipes();
+		ami_cleanup();
 		return -1;
 	}
-	ami_socket = fd;
 	ami_callback = callback;
 	disconnected_callback = dis_callback;
 	ami_msg_id = 0;
