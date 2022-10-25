@@ -77,6 +77,8 @@ static int ami_event_pipe[2];	/* Pipe for dispatching events to user callback fu
 static void (*ami_callback)(struct ami_event *event);
 static void (*disconnected_callback)(void);
 
+static int maxwaitms = AMI_MAX_WAIT_TIME;
+
 static pthread_mutex_t ami_read_lock;
 /* Reading is protected by the ami_read_lock */
 static struct ami_response *current_response = NULL;
@@ -199,6 +201,8 @@ static void *ami_loop(void *vargp)
 					next = *endofevent; /* save the first char of the next event (if there is one, maybe this is the null terminator...) */
 					*endofevent = '\0'; /* Now let's pretend like this is the end. */
 
+					ami_debug(10, "Next chunk: %.*s ...\n", 18, nextevent);
+
 					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
 					if (starts_response) {
 						ami_debug(7, "Got start of response... (%s)\n", nextevent);
@@ -207,6 +211,7 @@ static void *ami_loop(void *vargp)
 							/* Response is actually just a lone response... there aren't multiple events to follow */
 							starts_response = 0; /* Technically, it's the start, middle, AND end... but treat it like it's the end */
 							end_of_response = 1;
+							ami_debug(9, "Finished eventless response\n");
 						}
 					} else { /* If we know this event starts a response, no need to confirm there's an ActionID, there is one!. */
 						if (strstr(nextevent, "EventList: Complete")) {
@@ -224,15 +229,18 @@ static void *ami_loop(void *vargp)
 							ami_debug(1, "BUG! Failed to detect end of response?\n");
 						}
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
+						ami_debug(9, "Dispatching lone (unsolicited) event\n");
 						ami_event_handle(laststart);
 						lasteventstart = laststart = endofevent;
 						event_pending = response_pending = 0;
 					} else if (end_of_response) { /* We just wrapped up a response. */
+						ami_debug(9, "Response has been finalized\n");
 						ami_event_handle(laststart);
 						lasteventstart = laststart = endofevent;
 						event_pending = response_pending = 0;
 					} else if (!loggedin) { /* Response to "Login" */
 						/* If we're not logged in, we can only ever get a single event. */
+						ami_debug(5, "Received login response\n");
 						ami_event_handle(laststart); /* The "Login" response doesn't contain any events. If we see it, then send it on immediately. */
 						lasteventstart = laststart = endofevent;
 						event_pending = response_pending = 0;
@@ -240,6 +248,7 @@ static void *ami_loop(void *vargp)
 							loggedin = 1; /* We can't actually wait for ami_action_login to set this flag. We need it to be 1 next time we loop (NOW). */
 						}
 					} else if (starts_response || middle_of_response) { /* We started and/or are in the middle of a response, but events remain. Keep going. */
+						ami_debug(10, "Still in the middle of a response\n");
 						response_pending = 1;
 						event_pending = 0; /* Only relevant if !response_pending, anyways */
 					}
@@ -247,17 +256,34 @@ static void *ami_loop(void *vargp)
 					lasteventstart = nextevent = endofevent; /* This is the beginning of the next event (if there is one) */
 				}
 
+				/* Here, we peek at what's next to process. *nextevent is the beginning of the substring that we'll loop over next time. */
+
 				/* XXX This is kind of a kludge. Apparently sometimes we'll get a Response: line, and that's it, and ActionID the next line.
 				 * Without this, because we're not aware a response is pending yet, we'll execute the !response_pending branch below,
 				 * which will set lasteventstart to the current buffer position, overwriting what we just read ("Response:")
 				 * This kludge is complete because if we check for this first line, then response_pending will be true afterwards
 				 * so we'll execute the right branch if that happens again, and not overwrite what we just read. */
+
+				/* If *nextevent, that means that there's still data remaining from what we already read, but we haven't finished reading yet.
+				 * i.e. we have some data but no trailing AMI_EOM so we have a partial event or response available.
+				 * XXX Sometimes these 2 branches are triggered when it takes multiple socket reads to receive the entire response.
+				 * Don't think anything's actually wrong in that case. */
+
 				if (!event_pending && *nextevent) {
-					ami_debug(1, "WARNING: Empty line in event?\n");
+					if (debug_level >= 6) {
+						ami_debug(6, "WARNING: Empty line in event? (%s)\n", nextevent);
+					} else {
+						ami_debug(1, "WARNING: Empty line in event?\n");
+					}
 					event_pending = 1;
 				} else if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
-					/* In theory, not necessary? (covered by previous branch?) */
-					ami_debug(1, "WARNING: Empty line in response event?\n");
+					/* In theory, not necessary? (covered by previous branch?) XXX Not so, because the above doesn't care about response_pending. */
+					/* Okay, what happened here was we weren't waiting for a response and suddenly we started one. */
+					if (debug_level >= 6) {
+						ami_debug(6, "WARNING: Empty line in response event? (%s)\n", nextevent);
+					} else {
+						ami_debug(1, "WARNING: Empty line in response event?\n");
+					}
 					response_pending = 1;
 				}
 
@@ -265,7 +291,7 @@ static void *ami_loop(void *vargp)
 				if (response_pending || event_pending) { /* Incomplete, waiting for the end of this response */
 					int len;
 					/* Ouch... we started a response but didn't get the end of it yet... */
-					ami_debug(4, "Asterisk left us high and dry for the end of the response, polling again...\n");
+					ami_debug(6, "Asterisk left us high and dry for the end of the response (%d/%d), polling again...\n", response_pending, event_pending);
 #if 0
 					if (*nextevent) {
 						/* Don't do this: this will actually just terminate some responses so we miss the completion event (see Issue #4) */
@@ -488,7 +514,7 @@ static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, co
 		ami_debug(1, "Yikes! AMI action wasn't properly terminated!\n"); /* This means there's a bug somewhere else. */
 	}
 
-	ami_debug(5, "==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
+	ami_debug(4, "==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
 	bytes = write(ami_pipe[1], fullbuf, len);
 	if (bytes < 1) {
 		ami_debug(1, "Failed to write to pipe\n");
@@ -744,7 +770,7 @@ static void ami_event_handle(char *data)
 		 */
 		struct ami_response *resp;
 		/* Response to an action, containing 1 or more events */
-		ami_debug(5, "<== AMI Response: %.*s...\n", AMI_RESPONSE_PREVIEW_SIZE, data); /* Only show a preview of the first "chunk", since it could be large... */
+		ami_debug(4, "<== AMI Response: %.*s...\n", AMI_RESPONSE_PREVIEW_SIZE, data); /* Only show a preview of the first "chunk", since it could be large... */
 		resp = ami_parse_response(data);
 		if (!resp) {
 			ami_debug(1, "Failed to parse response?\n");
@@ -753,7 +779,20 @@ static void ami_event_handle(char *data)
 			ami_resp_free(resp);
 		} else if (resp->actionid != ami_msg_id) {
 			/* No need to check that resp->actionid is nonzero. Every response has an ActionID in the response. */
-			ami_debug(1, "Received response with ActionID %d, but we expected %d\n", resp->actionid, ami_msg_id);
+			/* ami_msg_id is the most recently sent action, so it's possible we could still be waiting for
+			 * responses that haven't arrived yet, that will arrive after successive actions have already been sent.
+			 * In this case, it's a legitimate thing to happen, although it may be a little strange.
+			 * What we know should NEVER happen is resp->actionid > ami_msg_id, since no such action would have been
+			 * sent yet.
+			 */
+			if (resp->actionid > ami_msg_id) {
+				ami_debug(1, "WARNING: Received response with ActionID %d, but we max action is %d?\n", resp->actionid, ami_msg_id);
+			} else {
+				/* Still, if you DO see this, then maxwaitms was probably not high enough for whatever action was sent.
+				 * This is because actions are processed in serial, one at a time, so there can't be any parallel actions
+				 * that are waiting for responses. */
+				ami_debug(1, "Received response with ActionID %d (older than max action %d)\n", resp->actionid, ami_msg_id);
+			}
 		} else {
 			char buf[AMI_MAX_ACTIONID_STRLEN];
 			snprintf(buf, AMI_MAX_ACTIONID_STRLEN, "%d", resp->actionid);
@@ -761,7 +800,7 @@ static void ami_event_handle(char *data)
 			/* Don't try to lock ami_read_lock until AFTER we write to the pipe, or we'll cause deadlock. */
 			if (current_response) {
 				/* Could indicate a bug, but not necessarily... perhaps the consumer just forgot about it? */
-				ami_debug(1, "Found a response still active? Somebody's getting his lunch stolen...\n");
+				ami_debug(1, "Found a response %p (%d) still active? Somebody's getting his lunch stolen...\n", current_response, current_response->actionid);
 				current_response = NULL;
 			}
 			current_response = resp;
@@ -819,13 +858,16 @@ static void ami_event_handle(char *data)
 			pthread_mutex_lock(&ami_read_lock);
 			/* Okay, at this point current_response should be NULL. (We're the only thread serving up responses) */
 			if (current_response) {
-				ami_debug(1, "BUG! current_response was %p immediately after lock acquired?\n", current_response);
+				ami_debug(1, "BUG! current_response was %p (%d) immediately after lock acquired?\n", current_response, current_response->actionid);
 			}
 			pthread_mutex_unlock(&ami_read_lock);
 #else
 			if (!pthread_mutex_trylock(&ami_read_lock)) {
 				if (current_response) {
-					ami_debug(1, "BUG! current_response was %p immediately after lock acquired?\n", current_response);
+					/* On one occasion, I observed this bug arising because Asterisk was sending an AMI error
+					 * but then sending a successful response afterwards, rather than bailing early as it should have been.
+					 * So this could indicate something is wrong with the Asterisk response. */
+					ami_debug(1, "BUG! current_response was %p (%d) immediately after lock acquired?\n", current_response, current_response->actionid);
 				}
 				pthread_mutex_unlock(&ami_read_lock);
 			}
@@ -838,7 +880,7 @@ static void ami_event_handle(char *data)
 		}
 	} else {
 		/* A single, unsolicited event (not in response to an action) */
-		ami_debug(5, "<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
+		ami_debug(4, "<== AMI Event: %s\n", data); /* Show the whole thing, it's probably not THAT big... */
 		if (ami_callback) {
 			int bytes;
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
@@ -863,37 +905,41 @@ static int ami_wait_for_response(int msgid)
 	fds.fd = ami_read_pipe[0];
 	fds.events = POLLIN;
 
-	res = poll(&fds, 1, AMI_MAX_WAIT_TIME);
-	if (res < 0) {
-		if (errno != EINTR) {
-			ami_debug(1, "poll returned error: %s\n", strerror(errno));
-		} else {
-			ami_debug(1, "poll returned something else: %s\n", strerror(errno));
-		}
-		return -1;
-	} else if (!res) { /* Nothing happened */
-		ami_debug(1, "Didn't receive any AMI response within %d ms?\n", AMI_MAX_WAIT_TIME);
-		if (current_response) {
-			/* Chances of this happening are almost nil, but it could happen... maybe? */
-			ami_debug(1, "Okay, weird, we must have missed it before...\n");
+	for (;;) {
+		res = poll(&fds, 1, maxwaitms);
+		if (res < 0) {
+			if (errno != EINTR) {
+				ami_debug(1, "poll returned error: %s\n", strerror(errno));
+			} else {
+				ami_debug(1, "poll returned something else: %s\n", strerror(errno));
+			}
+			return -1;
+		} else if (!res) { /* Nothing happened */
+			ami_debug(1, "Didn't receive any AMI response (for %d) within %d ms?\n", msgid, maxwaitms);
+			if (current_response) {
+				/* Chances of this happening are almost nil, but it could happen... maybe? */
+				ami_debug(1, "Okay, weird, we must have missed it before...\n");
+				return 0;
+			}
+			return -1;
+		} else if (fds.revents) {
+			int eventnum;
+			char buf[AMI_MAX_ACTIONID_STRLEN];
+			if (read(ami_read_pipe[0], buf, AMI_MAX_ACTIONID_STRLEN) < 1) {
+				ami_debug(1, "read pipe failed?\n");
+				return -1;
+			}
+			eventnum = atoi(buf);
+			if (msgid != eventnum) {
+				ami_debug(1, "Strange... got event %d, not %d\n", eventnum, msgid);
+				/* If it's not our event, it's not our turn yet, wait again and don't process it. */
+				continue;
+			}
 			return 0;
-		}
-		return -1;
-	} else if (fds.revents) {
-		int eventnum;
-		char buf[AMI_MAX_ACTIONID_STRLEN];
-		if (read(ami_read_pipe[0], buf, AMI_MAX_ACTIONID_STRLEN) < 1) {
-			ami_debug(1, "read pipe failed?\n");
+		} else {
+			ami_debug(1, "How'd I get here?\n");
 			return -1;
 		}
-		eventnum = atoi(buf);
-		if (msgid != eventnum) {
-			ami_debug(1, "Strange... got event %d, not %d\n", eventnum, msgid);
-		}
-		return 0;
-	} else {
-		ami_debug(1, "How'd I get here?\n");
-		return -1;
 	}
 }
 
@@ -1029,6 +1075,11 @@ int ami_action_response_result(struct ami_response *resp)
 		ami_debug(1, "AMI action response returned %d events?\n", resp->size);
 	} else {
 		res = resp->success ? 0 : -1;
+		if (res) {
+			const char *error = ami_keyvalue(resp->events[0], "Message");
+			/* Actions can fail due to user error, so this isn't our fault. */
+			ami_debug(2, "AMI action %d failed: %s\n", resp->actionid, error);
+		}
 	}
 
 	ami_resp_free(resp);
@@ -1167,6 +1218,33 @@ int ami_action_reload(const char *module)
 		return -1;
 	}
 
+	/* In ami_wait_for_response, we wait maxwaitms maximum for a response.
+	 * This is done to prevent hanging if we never receive a response.
+	 * However, Reloads can take a legitimately long time to process, especially if we are reloading more than one module.
+	 * So, we need to be more patient - this is kind of a hack, but temporarily override maxwaitms and restore
+	 * the old value when done.
+	 * This is safe to do, since we may have a longer wait time for actions that arrive during this time, which is okay.
+	 * If we get another reload while we're in one, we won't override it to avoid doing so twice, to ensure
+	 * we always properly restore the original value.
+	 *
+	 * This is not merely done to avoid annoying logs... since we bail out if we don't receive a response in the threshold,
+	 * we'll:
+	 * a) Fail to return a response to the reload, which effectively returns an error for a reload that may have succeeded.
+	 * b) Not fetch the response, which means when it does finish and arrive, somebody else will see it, which is not
+	 *    what we wanted either.
+	 *
+	 * So we need to always remember to override maxwaitms to the maximum reasonable value for events that may
+	 * take longer than normal, such as Reload.
+	 */
+
+	if (maxwaitms == AMI_MAX_WAIT_TIME) {
+		maxwaitms = 7500; /* 7.5 seconds ought to be enough for any module to reload. */
+	}
+
 	resp = ami_action("Reload", "Module:%s", module);
+
+	if (maxwaitms != AMI_MAX_WAIT_TIME) {
+		maxwaitms = AMI_MAX_WAIT_TIME;
+	}
 	return ami_action_response_result(resp);
 }
