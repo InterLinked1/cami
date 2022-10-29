@@ -46,6 +46,14 @@
 #define AMI_RESPONSE_PREVIEW_SIZE 32
 #define OUTBOUND_BUFFER_SIZE 2048
 
+/* Rather than return failed action responses to the user, return NULL.
+ * Errors will be logged to log level 2.
+ * This can make application development easier as you can check for NULL
+ * instead checking if the response was NULL or not successful.
+ * If you must obtain the error messages in your application, this must
+ * be disabled. */
+#define RETURN_NULL_ON_ERROR
+
 /*! \brief Simple logger, with second:millisecond, lineno display */
 #define ami_debug(level, fmt, ...) { \
 	if (debug_level >= level) { \
@@ -1002,11 +1010,17 @@ struct ami_response *ami_action(const char *action, const char *fmt, ...)
 			if (resp->actionid != actionid) {
 				/*! \note If we ever make it so multiple AMI responses can go out at once, this may need to be revisited... */
 				ami_debug(1, "BUG! Expected ActionID %d in response, but got %d\n", actionid, resp->actionid);
-			} else if (!resp->success) {
+			}
+#ifdef RETURN_NULL_ON_ERROR
+			else if (!resp->success) {
 				/* We got a response, and it's telling us that we failed. */
+				const char *error = ami_keyvalue(resp->events[0], "Message");
+				/* Actions can fail due to user error, so this isn't our fault. */
+				ami_debug(2, "AMI action %d failed: %s\n", resp->actionid, error);
 				ami_resp_free(resp); /* If we're not returning it to the user, free it now */
 				resp = NULL; /* Try harder next time... */
 			}
+#endif
 		}
 	}
 
@@ -1069,6 +1083,8 @@ int ami_action_response_result(struct ami_response *resp)
 	int res = -1;
 
 	if (!resp) {
+		/* If user does something like ami_action_response_result(ami_action(...)) then we could end up here. */
+		ami_debug(2, "No response to AMI action\n");
 		return -1;
 	}
 	if (resp->size != 1) {
