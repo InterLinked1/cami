@@ -98,7 +98,7 @@ int ami_action_login(const char *username, const char *password);
 
 /*! \brief Try to determine the AMI password from manager.conf, if we have access to it */
 /*! \note This is a convenience function and will only work in the most simplistic cases (same host, user with read access to /etc/asterisk/manager.conf) */
-int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen)
+int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen);
 
 /*! \brief Request a custom AMI action */
 /*! \action Name of AMI action (as defined by Asterisk) */
