@@ -1090,7 +1090,7 @@ int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen)
 	size_t len;
 	int found = 0, right_section = 0;
 
-	char searchsection[strlen(amiusername) + 3];
+	char searchsection[64]; /* Use fixed size instead of strlen(amiusername) + 3, to avoid stack protector warnings */
 	snprintf(searchsection, sizeof(searchsection), "[%s]", amiusername);
 
 	fp = fopen("/etc/asterisk/manager.conf", "r");
