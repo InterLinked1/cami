@@ -96,6 +96,10 @@ void ami_resp_free(struct ami_response *resp);
 /*! \note Assuming ami_connect was successful, this should be the first thing you call before doing anything else. */
 int ami_action_login(const char *username, const char *password);
 
+/*! \brief Try to determine the AMI password from manager.conf, if we have access to it */
+/*! \note This is a convenience function and will only work in the most simplistic cases (same host, user with read access to /etc/asterisk/manager.conf) */
+int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen)
+
 /*! \brief Request a custom AMI action */
 /*! \action Name of AMI action (as defined by Asterisk) */
 /*! \fmt Format string containing any action-specified AMI parameters, followed by your arguments (just like printf). Do NOT end with newlines. */

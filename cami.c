@@ -739,6 +739,10 @@ static void *ami_event_dispatch(void *varg)
 				ami_debug(1, "read pipe failed?\n");
 				break;
 			}
+			if (buf[res - 1] != '\0') {
+				ami_debug(2, "Buffer was not null terminated, incomplete?\n");
+				/* XXX We should wait for the null terminator and/or split on null terminator if we read multiple events. */
+			}
 			buf[res] = '\0';
 			event = ami_parse_event(buf);
 			/* Provide the user with the original event, user is responsible for freeing */
@@ -892,7 +896,7 @@ static void ami_event_handle(char *data)
 		if (ami_callback) {
 			int bytes;
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
-			bytes = write(ami_event_pipe[1], data, strlen(data));
+			bytes = write(ami_event_pipe[1], data, strlen(data) + 1); /* Include null terminator. */
 			if (bytes < 1) {
 				ami_debug(1, "Failed to write to pipe\n");
 			}
@@ -1076,6 +1080,60 @@ int ami_action_login(const char *username, const char *password)
 	pthread_mutex_unlock(&ami_read_lock);
 
 	return res;
+}
+
+int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen)
+{
+	FILE *fp;
+	char *line;
+	long int readres;
+	size_t len;
+	int found = 0, right_section = 0;
+
+	char searchsection[strlen(amiusername) + 3];
+	snprintf(searchsection, sizeof(searchsection), "[%s]", amiusername);
+
+	fp = fopen("/etc/asterisk/manager.conf", "r");
+	if (!fp) {
+		return -1;
+	}
+
+	while ((readres = getline(&line, &len, fp)) != -1) {
+		if (strstr(line, searchsection)) {
+			right_section = 1;
+		} else if (!strncmp(line, "[", 1)) {
+			right_section = 0;
+		} else if (right_section) {
+			if (!strncmp(line, "secret", 6)) {
+				char *secret = strchr(line, '='); /* Get the value for the key */
+				if (!secret) {
+					continue;
+				}
+				/* Skip any leading whitespace */
+				secret++;
+				while (*secret && isspace(*secret)) {
+					secret++;
+				}
+				strncpy(buf, secret, buflen);
+				secret = buf;
+				/* Skip any trailing whitespace */
+				while (*secret) {
+					if (isspace(*secret) || *secret == '\r' || *secret == '\n' || *secret == ';') {
+						*secret = '\0';
+						break;
+					}
+					secret++;
+				}
+				found = 1;
+				break;
+			}
+		}
+	}
+	fclose(fp);
+	if (line) {
+		free(line);
+	}
+	return found ? 0 : -1;
 }
 
 int ami_action_response_result(struct ami_response *resp)
