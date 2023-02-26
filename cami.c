@@ -1085,7 +1085,7 @@ int ami_action_login(const char *username, const char *password)
 int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen)
 {
 	FILE *fp;
-	char *line;
+	char *line = NULL;
 	long int readres;
 	size_t len;
 	int found = 0, right_section = 0;
