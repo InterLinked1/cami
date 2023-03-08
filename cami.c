@@ -75,7 +75,7 @@
 	} \
 }
 
-static pthread_t ami_thread, dispatch_thread;
+static pthread_t ami_thread = 0, dispatch_thread = 0;
 static int ami_socket = -1;
 static int debugfd = -1;
 static int debug_level = 0;
@@ -362,7 +362,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		 * It just means that somebody probably called ami_connect twice
 		 * without disconnecting inbetween...
 		 */
-		ami_disconnect(); /* Disconnect to prevent a resource leak */
+		ami_cleanup(); /* Disconnect to prevent a resource leak */
 	}
 
 	memset(&saddr, 0, sizeof(saddr));
@@ -419,8 +419,16 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		pthread_mutexattr_destroy(&attr);
 	}
 
-	pthread_create(&ami_thread, NULL, ami_loop, NULL);
-	pthread_create(&dispatch_thread, NULL, ami_event_dispatch, NULL);
+	if (pthread_create(&ami_thread, NULL, ami_loop, NULL)) {
+		ami_debug(1, "Unable to create AMI thread: %s\n", strerror(errno));
+		ami_cleanup();
+		return -1;
+	}
+	if (pthread_create(&dispatch_thread, NULL, ami_event_dispatch, NULL)) {
+		ami_debug(1, "Unable to create dispatch thread: %s\n", strerror(errno));
+		ami_cleanup();
+		return -1;
+	}
 
 	return 0;
 }
@@ -431,12 +439,18 @@ int ami_disconnect(void)
 		return -1;
 	}
 
-	pthread_cancel(ami_thread);
-	pthread_cancel(dispatch_thread);
-	pthread_kill(ami_thread, SIGURG);
-	pthread_kill(dispatch_thread, SIGURG);
-	pthread_join(ami_thread, NULL);
-	pthread_join(dispatch_thread, NULL);
+	if (ami_thread) {
+		pthread_cancel(ami_thread);
+		pthread_kill(ami_thread, SIGURG);
+		pthread_join(ami_thread, NULL);
+		ami_thread = 0;
+	}
+	if (dispatch_thread) {
+		pthread_cancel(dispatch_thread);
+		pthread_kill(dispatch_thread, SIGURG);
+		pthread_join(dispatch_thread, NULL);
+		dispatch_thread = 0;
+	}
 
 	if (ami_socket >= 0) {
 		ami_debug(2, "Since we killed the AMI connection, manually cleaning up\n");
