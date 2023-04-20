@@ -348,10 +348,19 @@ static void *ami_loop(void *vargp)
 	return NULL;
 }
 
+/* Try to prevent user applications from blowing things up.
+ * If ami_connect is called by users when it shouldn't be,
+ * that could result in starting up multiple AMI connections,
+ * and then all hell really breaks loose.
+ * Even though that's a user bug, try to prevent that. */
+#define REJECT_DUPLICATE_RECONNECTS 1
+
 int ami_connect(const char *hostname, int port, void (*callback)(struct ami_event *event), void (*dis_callback)(void))
 {
 	int fd;
 	struct sockaddr_in saddr;
+
+	pthread_mutex_lock(&ami_read_lock);
 
 	if (ami_socket >= 0) {
 		/* Should pretty much NEVER happen on a clean cleanup
@@ -362,6 +371,10 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		 * It just means that somebody probably called ami_connect twice
 		 * without disconnecting inbetween...
 		 */
+		if (REJECT_DUPLICATE_RECONNECTS) {
+			ami_debug(1, "Rejecting duplicate AMI connection!\n"); /* Somebody's trying to connect again while there's a connection in progress? */
+			goto cleanup;
+		}
 		ami_cleanup(); /* Disconnect to prevent a resource leak */
 	}
 
@@ -370,16 +383,18 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		port = AMI_PORT;
 	}
 
+	ami_debug(1, "Initiating AMI connection on port %d\n", port);
+
 	/* If we can't make a pipe, forget about the socket. */
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_pipe)) {
 		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
-		return -1;
+		goto cleanup;
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_read_pipe)) {
 		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
 		close(ami_pipe[0]);
 		close(ami_pipe[1]);
-		return -1;
+		goto cleanup;
 	}
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami_event_pipe)) {
 		ami_debug(1, "Unable to create pipe: %s\n", strerror(errno));
@@ -387,14 +402,14 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 		close(ami_pipe[1]);
 		close(ami_read_pipe[0]);
 		close(ami_read_pipe[1]);
-		return -1;
+		goto cleanup;
 	}
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
 		ami_debug(1, "%s\n", strerror(errno));
 		close_pipes();
-		return -1;
+		goto cleanup;
 	}
 	ami_socket = fd;
 	inet_pton(AF_INET, hostname, &(saddr.sin_addr));
@@ -403,7 +418,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
 		ami_debug(1, "%s\n", strerror(errno));
 		ami_cleanup();
-		return -1;
+		goto cleanup;
 	}
 	ami_callback = callback;
 	disconnected_callback = dis_callback;
@@ -422,15 +437,20 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	if (pthread_create(&ami_thread, NULL, ami_loop, NULL)) {
 		ami_debug(1, "Unable to create AMI thread: %s\n", strerror(errno));
 		ami_cleanup();
-		return -1;
+		goto cleanup;
 	}
 	if (pthread_create(&dispatch_thread, NULL, ami_event_dispatch, NULL)) {
 		ami_debug(1, "Unable to create dispatch thread: %s\n", strerror(errno));
 		ami_cleanup();
-		return -1;
+		goto cleanup;
 	}
 
+	pthread_mutex_unlock(&ami_read_lock);
 	return 0;
+
+cleanup:
+	pthread_mutex_unlock(&ami_read_lock);
+	return -1;
 }
 
 int ami_disconnect(void)
@@ -1065,12 +1085,13 @@ int ami_action_login(const char *username, const char *password)
 	res = ami_wait_for_response(ami_msg_id);
 	if (res) { /* Asterisk didn't ID itself? Abort. */
 		pthread_mutex_unlock(&ami_read_lock);
+		ami_debug(1, "Asterisk did not identify itself\n");
 		return -1;
 	}
 	/* Remember: no trailing \r\n !*/
 	if (ami_send("Login", "Username:%s\r\nSecret:%s", username, password)) {
-		ami_debug(1, "Failed to send AMI action\n");
 		pthread_mutex_unlock(&ami_read_lock);
+		ami_debug(1, "Failed to send AMI action\n");
 		return -1; /* Failed to send */
 	}
 	/* Now wait until we (hopefully) get a response... */
