@@ -768,19 +768,34 @@ static void *ami_event_dispatch(void *varg)
 			break;
 		}
 		if (res) {
+			char *start, *end;
 			res = read(ami_event_pipe[0], buf, AMI_BUFFER_SIZE - 1);
 			if (res < 1) {
 				ami_debug(1, "read pipe failed?\n");
 				break;
 			}
-			if (buf[res - 1] != '\0') {
-				ami_debug(2, "Buffer was not null terminated, incomplete?\n");
-				/* XXX We should wait for the null terminator and/or split on null terminator if we read multiple events. */
+			/* Be prepared to receive multiple events, or not even a complete one. */
+			start = buf;
+			do {
+				int bytes_used;
+				end = memchr(start, '\0', res);
+				if (!end) {
+					break;
+				}
+				event = ami_parse_event(start);
+				ami_callback(event); /* Provide the user with the original event, user is responsible for freeing */
+				bytes_used = end - start + 1;
+				res -= bytes_used;
+				/* Set ourselves up for the next round */
+				start = end + 1; /* If res is still > 0, then start is guaranteed to be valid (initialized memory) */
+			} while (res);
+			if (res) {
+				ami_debug(1, "Buffer was not null terminated, incomplete?\n");
+				/*! \todo XXX BUGBUG Unlikely, but we should really wait for the null terminator, as the event may be incomplete here on partial read. */
+				start[res - 1] = '\0';
+				event = ami_parse_event(start);
+				ami_callback(event); /* Provide the user with the original event, user is responsible for freeing */
 			}
-			buf[res] = '\0';
-			event = ami_parse_event(buf);
-			/* Provide the user with the original event, user is responsible for freeing */
-			ami_callback(event);
 		}
 	}
 
