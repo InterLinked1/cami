@@ -23,7 +23,7 @@ jobs:
         run: echo Beginning build
   container:
     runs-on: ubuntu-latest
-    container: debian:11
+    container: debian:12
     steps:
       - name: Build Asterisk
         run: |
@@ -51,4 +51,6 @@ jobs:
           git clone https://github.com/InterLinked1/cami.git
           cd cami
           make
-          ./cami
+          make install
+          make example
+          ./simpleami
