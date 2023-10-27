@@ -20,8 +20,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "include/cami.h"
-#include "include/cami_actions.h"
+#include <cami/cami.h>
+#include <cami/cami_actions.h>
 
 /*
  * This is a simple demo program that will use C AMI to log in,
@@ -58,6 +58,7 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 	ami_set_debug_level(1);
 #endif
 	if (ami_connect(hostname, 0, simple_callback, simple_disconnect_callback)) {
+		fprintf(stderr, "Failed to connect to AMI\n");
 		return -1;
 	}
 	if (ami_action_login(username, password)) {

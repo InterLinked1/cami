@@ -7,9 +7,13 @@ This is C-AMI, or C Asterisk Manager Interface, an AMI library for Asterisk.
 
 The program is named CAMI as it takes its cue from AMI libraries for other languages, such as PAMI, NAMI, and erlami. However, it is not affiliated with the Asterisk project (nor other AMI libraries).
 
-## Usage
+## Compiling
 
-Simply compile your program with `cami.c` and include the CAMI header files where needed.
+You may simply statically compile your program with `cami.c` and include the CAMI header files where needed.
+
+Alternately, you may build and install the library by running `make install`.
+
+## Usage
 
 C-AMI allows you to send arbitrary AMI Actions, although some convenience macros are included to make this easier.
 
@@ -27,7 +31,7 @@ This program is an AMI library that is designed to be included in a C program to
 
 For demonstration purposes, a simple standalone program is also included. It is recommended that you consult this for an overview of how C-AMI can be used.
 
-Assuming you have `gcc`, simply clone the repository and run `make` to compile the demo program with C-AMI.
+Assuming you have `gcc`, simply clone the repository and run `make example` to compile the demo program with C-AMI.
 
 (You will likely want to update the connection details for your Asterisk system). Then run `./cami` to run.
 
