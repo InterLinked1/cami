@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <sys/socket.h>
+#include <netinet/in.h> /* use sockaddr_in */
 #include <sys/types.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -32,8 +33,11 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
-#include <alloca.h>
 #include <sys/time.h>	/* use gettimeofday */
+
+#ifdef __linux__
+#include <alloca.h>
+#endif
 
 #include "include/cami.h"
 
@@ -426,7 +430,7 @@ int ami_connect(const char *hostname, int port, void (*callback)(struct ami_even
 	{
 		pthread_mutexattr_t attr;
 		pthread_mutexattr_init(&attr);
-		pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE_NP);
+		pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
 		pthread_mutex_init(&ami_read_lock, &attr);
 		pthread_mutexattr_destroy(&attr);
 	}
