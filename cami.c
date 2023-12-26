@@ -556,6 +556,16 @@ static int __attribute__ ((format (gnu_printf, 3, 4))) __ami_send(va_list ap, co
 		/* Shouldn't happen if everything else is correct, but if message wasn't properly terminated, it won't get processed. Fix it to force it to go through. */
 		ami_debug(1, "Yikes! AMI action wasn't properly terminated!\n"); /* This means there's a bug somewhere else. */
 	}
+	while (len >= 5 && (*(fullbuf + len - 5) == '\r' || *(fullbuf + len - 5) == '\n')) {
+		/* Asterisk will stop parsing this message after two CR LF sequences,
+		 * and anything afterwards will (fail to) be interpreted as the next message.
+		 * This will throw off synchronization so is very bad.
+		 * This is user error, but we can correct it by removing the erroneous CR LF's,
+		 * or other possibly malformed line endings, including stray LFs, etc. */
+		ami_debug(1, "WARNING: Too many line endings at end of action. Autocorrecting...\n");
+		len--;
+		strcpy(fullbuf + len - 4, AMI_EOM); /* Safe */
+	}
 
 	ami_debug(4, "==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
 	bytes = write(ami_pipe[1], fullbuf, len);

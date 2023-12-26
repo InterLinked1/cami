@@ -52,5 +52,5 @@ jobs:
           cd cami
           make
           make install
-          make example
+          make examples
           ./simpleami

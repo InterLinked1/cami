@@ -31,9 +31,9 @@ This program is an AMI library that is designed to be included in a C program to
 
 For demonstration purposes, a simple standalone program is also included. It is recommended that you consult this for an overview of how C-AMI can be used.
 
-Assuming you have `gcc`, simply clone the repository and run `make example` to compile the demo program with C-AMI.
+Assuming you have `gcc`, simply clone the repository and run `make examples` to compile the demo programs with C-AMI.
 
-(You will likely want to update the connection details for your Asterisk system). Then run `./cami` to run.
+(You will likely want to update the connection details for your Asterisk system). Then run `./simpleami` to run.
 
 ## Contributions
 

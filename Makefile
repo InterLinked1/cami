@@ -9,6 +9,7 @@
 CC		= gcc
 CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O3 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2
 EXE		= cami
+SAMPEXES = simpleami amicli
 LIBNAME = libcami
 LIBS	= -lm
 RM		= rm -f
@@ -28,11 +29,16 @@ install:
 	mkdir -p /usr/include/$(EXE)
 	$(INSTALL) -m 755 include/*.h "/usr/include/$(EXE)/"
 
-example : library install simpleami.o
+simpleami: library install simpleami.o
 	$(CC) $(CFLAGS) -o simpleami simpleami.o -l$(EXE) $(LIBS) -ldl
 
+amicli: library install amicli.o
+	$(CC) $(CFLAGS) -o amicli amicli.o -l$(EXE) $(LIBS) -ldl
+
+examples : $(SAMPEXES)
+
 clean :
-	$(RM) *.i *.o $(EXE)
+	$(RM) *.i *.o $(EXE) $(SAMPEXES) $(LIBNAME).so
 
 uninstall:
 	$(RM) /usr/lib/$(EXE).so
