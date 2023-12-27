@@ -33,7 +33,7 @@
  */
 
 /*! \brief Callback function executing asynchronously when new events are available */
-static void simple_callback(struct ami_event *event)
+static void simple_callback(struct ami_session *ami, struct ami_event *event)
 {
 	const char *eventname = ami_keyvalue(event, "Event");
 	printf("(Callback) Event Received: %s\n", eventname);
@@ -44,29 +44,34 @@ static void simple_callback(struct ami_event *event)
 	ami_event_free(event); /* Free event when done with it */
 }
 
-static void simple_disconnect_callback(void)
+static void simple_disconnect_callback(struct ami_session *ami)
 {
+	(void) ami;
 	printf("(Callback) AMI was forcibly disconnected...\n");
 	/* Try to re-establish the connection, or other error handling... */
+	exit(EXIT_FAILURE);
 }
 
 static int simple_ami(const char *hostname, const char *username, const char *password)
 {
+	struct ami_session *ami;
 	struct ami_response *resp = NULL;
 #if 0
 	ami_set_debug(STDERR_FILENO); /* Not recommended for daemon programs */
 	ami_set_debug_level(1);
 #endif
-	if (ami_connect(hostname, 0, simple_callback, simple_disconnect_callback)) {
+	ami = ami_connect(hostname, 0, simple_callback, simple_disconnect_callback);
+	if (!ami) {
 		fprintf(stderr, "Failed to connect to AMI\n");
 		return -1;
 	}
-	if (ami_action_login(username, password)) {
+	if (ami_action_login(ami, username, password)) {
 		fprintf(stderr, "Failed to log in\n");
+		ami_destroy(ami);
 		return -1;
 	}
 	fprintf(stderr, "*** Successfully logged in to AMI on %s (%s) ***\n", hostname, username);
-	resp = ami_action_show_channels();
+	resp = ami_action_show_channels(ami);
 	if (resp) { /* Got a response to our action */
 #define AMI_CHAN_FORMAT "%-40s | %8s | %s\n"
 		int i;
@@ -83,7 +88,8 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 #endif
 		ami_resp_free(resp); /* Free response when done with it */
 	}
-	ami_disconnect();
+	ami_disconnect(ami);
+	ami_destroy(ami);
 	return 0;
 }
 

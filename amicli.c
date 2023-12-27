@@ -33,9 +33,10 @@
  */
 
 /*! \brief Callback function executing asynchronously when new events are available */
-static void ami_callback(struct ami_event *event)
+static void ami_callback(struct ami_session *ami, struct ami_event *event)
 {
 	const char *eventname = ami_keyvalue(event, "Event");
+	(void) ami;
 	printf("(Callback) Event Received: %s\n", eventname);
 #ifdef PRINT_EVENTS
 	ami_dump_event(event); /* Do something with event */
@@ -43,13 +44,14 @@ static void ami_callback(struct ami_event *event)
 	ami_event_free(event); /* Free event when done with it */
 }
 
-static void ami_disconnect_callback(void)
+static void ami_disconnect_callback(struct ami_session *ami)
 {
+	(void) ami;
 	printf("(Callback) AMI was forcibly disconnected...\n");
 	exit(EXIT_FAILURE);
 }
 
-static int single_ami_command(void)
+static int single_ami_command(struct ami_session *ami)
 {
 	char action[64];
 	char buf[8192];
@@ -126,7 +128,7 @@ static int single_ami_command(void)
 		*pos = '\0';
 	}
 
-	resp = ami_action(action, "%s", buf);
+	resp = ami_action(ami, action, "%s", buf);
 	if (!resp) {
 		fprintf(stderr, "AMI action '%s' failed\n", action);
 		return -1;
@@ -144,8 +146,7 @@ int main(int argc,char *argv[])
 	char ami_username[64] = "";
 	char ami_password[64] = "";
 	int debug = 0;
-
-	ami_set_debug(STDERR_FILENO);
+	struct ami_session *ami;
 
 	while ((c = getopt(argc, argv, getopt_settings)) != -1) {
 		switch (c) {
@@ -180,7 +181,6 @@ int main(int argc,char *argv[])
 	if (debug > 10) {
 		debug = 10;
 	}
-	ami_set_debug_level(debug);
 
 	if (ami_username[0] && !ami_password[0] && !strcmp(ami_host, "127.0.0.1")) {
 		/* If we're running as a privileged user with access to manager.conf, grab the password ourselves, which is more
@@ -198,17 +198,21 @@ int main(int argc,char *argv[])
 		return -1;
 	}
 
-	if (ami_connect(ami_host, 0, ami_callback, ami_disconnect_callback)) {
+	ami = ami_connect(ami_host, 0, ami_callback, ami_disconnect_callback);
+	if (!ami) {
 		return -1;
 	}
-	if (ami_action_login(ami_username, ami_password)) {
+	ami_set_debug_level(ami, debug);
+	ami_set_debug(ami, STDERR_FILENO);
+	ami_set_discard_on_failure(ami, 0);
+	if (ami_action_login(ami, ami_username, ami_password)) {
 		fprintf(stderr, "Failed to log in with username %s\n", ami_username);
 		return -1;
 	}
 
 	fprintf(stderr, "*** Successfully logged in to AMI on %s (%s) ***\n", ami_host, ami_username);
-	while (single_ami_command() > 0);
-	ami_disconnect();
-
+	while (single_ami_command(ami) > 0);
+	ami_disconnect(ami);
+	ami_destroy(ami);
 	return 0;
 }

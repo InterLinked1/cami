@@ -28,15 +28,24 @@
 
 /*! \todo Add more of these over time... */
 
-/*! \brief List all current channels */
-#define ami_action_show_channels() ami_action("CoreShowChannels", "")
+/*!
+ * \brief List all current channels
+ * \param ami
+ */
+#define ami_action_show_channels(ami) ami_action(ami, "CoreShowChannels", "")
 
-/*! \brief Attended transfer */
-/*! \param chan Channel name */
-/*! \param exten Extension */
-/*! \param context Context */
-#define ami_action_axfer(chan, exten, context) ami_action("Atxfer", "Channel:%s\r\nExten:%s\r\nContext:%s", chan, exten, context)
+/*!
+ * \brief Attended transfer
+ * \param ami
+ * \param chan Channel name
+ * \param exten Extension
+ * \param context Context
+ */
+#define ami_action_axfer(ami, chan, exten, context) ami_action(ami, "Atxfer", "Channel:%s\r\nExten:%s\r\nContext:%s", chan, exten, context)
 
-/*! \brief Cancel an attended transfer */
-/*! \param chan Channel name */
-#define ami_action_cancel_axfer(chan) ami_action("CancelAtxfer", "Channel:%s", chan)
+/*!
+ * \brief Cancel an attended transfer
+ * \param ami
+ * \param chan Channel name
+ */
+#define ami_action_cancel_axfer(ami, chan) ami_action(ami, "CancelAtxfer", "Channel:%s", chan)
