@@ -18,7 +18,7 @@
 
 #define CAMI_VERSION_MAJOR 0
 #define CAMI_VERSION_MINOR 2
-#define CAMI_VERSION_PATCH 0
+#define CAMI_VERSION_PATCH 1
 
 /* Max wait time in ms. Don't be tempted to make this too big, as this blocks all AMI traffic. Most of the time, it shouldn't really matter though. */
 #define AMI_MAX_WAIT_TIME 1000
@@ -58,6 +58,7 @@ void ami_set_debug(struct ami_session *ami, int fd);
 
 /*!
  * \brief Set debug logging level
+ * \param ami
  * \param level Level between 0 and 10. 0 will disable logging, 10 is the most granular. Default is 0.
  * \note A log level of 1 is recommended for production use: this will log all errors and warnings. Use a greater log level for debugging.
  * \retval -1 on failure, non-negative old log level otherwise
@@ -74,6 +75,20 @@ int ami_set_debug_level(struct ami_session *ami, int level);
  * \return AMI session on success
  */
 struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami));
+
+/*!
+ * \brief Set callback data
+ * \param ami
+ * \param data
+ */
+void ami_set_callback_data(struct ami_session *ami, void *data);
+
+/*!
+ * \brief Retrieve callback data
+ * |param ami
+ * \return Callback data
+ */
+void *ami_get_callback_data(struct ami_session *ami);
 
 /*!
  * \brief Close an existing AMI connection

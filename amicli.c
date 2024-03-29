@@ -200,6 +200,7 @@ int main(int argc,char *argv[])
 
 	ami = ami_connect(ami_host, 0, ami_callback, ami_disconnect_callback);
 	if (!ami) {
+		fprintf(stderr, "Failed to connect to %s\n", ami_host);
 		return -1;
 	}
 	ami_set_debug_level(ami, debug);

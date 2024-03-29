@@ -87,6 +87,7 @@ struct ami_session {
 	int ami_event_pipe[2];	/* Pipe for dispatching events to user callback functions */
 	void (*ami_callback)(struct ami_session *ami, struct ami_event *event);
 	void (*disconnected_callback)(struct ami_session *ami);
+	void *cb_data;			/* User callback data */
 	int ami_msg_id;
 	int tx;
 	int rx;
@@ -209,7 +210,7 @@ static void *ami_loop(void *varg)
 
 					ami_debug(ami, 10, "Next chunk: %.*s ...\n", 18, nextevent);
 
-					starts_response = !strncmp(nextevent, "Response:", 9) ? 1 : 0;
+					starts_response = !strncmp(nextevent, "Response:", 9);
 					if (starts_response) {
 						ami_debug(ami, 7, "Got start of response... (%s)\n", nextevent);
 						/* If there's an EventList field, it's a multi-event response. If not, it's not. */
@@ -229,13 +230,14 @@ static void *ami_loop(void *varg)
 							middle_of_response = 1;
 						}
 					}
+					ami_debug(ami, 10, "Starts response: %d, middle of response: %d, ends response: %d\n", starts_response, middle_of_response, end_of_response);
 					/* Now, figure out what we should do. */
-					if (!starts_response && !middle_of_response) {
-						if (response_pending && !end_of_response) {
+					if (!starts_response && !middle_of_response && !end_of_response) {
+						if (response_pending) {
 							ami_error(ami, "BUG! Failed to detect end of response?\n");
 						}
 						/* This isn't an event that belongs to a response, including the start of one. It's just a regular unsolicited event. Send it now */
-						ami_debug(ami, 9, "Dispatching lone (unsolicited) event\n");
+						ami_debug(ami, 9, "Dispatching lone (unsolicited) event (%.*s ...)\n", 18, nextevent);
 						ami_event_handle(ami, laststart);
 						lasteventstart = laststart = endofevent;
 						event_pending = response_pending = 0;
@@ -277,18 +279,18 @@ static void *ami_loop(void *varg)
 
 				if (!event_pending && *nextevent) {
 					if (ami->debug_level >= 6) {
-						ami_warning(ami, " Empty line in event? (%s)\n", nextevent);
+						ami_debug(ami, 6, "Empty line in event? Probably incomplete... (%s)\n", nextevent);
 					} else {
-						ami_warning(ami, "Empty line in event?\n");
+						ami_debug(ami, 2, "Empty line in event? Probably incomplete...\n");
 					}
 					event_pending = 1;
 				} else if (!response_pending && !strncmp(nextevent, "Response:", 9)) {
 					/* In theory, not necessary? (covered by previous branch?) XXX Not so, because the above doesn't care about response_pending. */
 					/* Okay, what happened here was we weren't waiting for a response and suddenly we started one. */
 					if (ami->debug_level >= 6) {
-						ami_warning(ami, "Empty line in response event? (%s)\n", nextevent);
+						ami_debug(ami, 6, "Empty line in response event? Probably incomplete... (%s)\n", nextevent);
 					} else {
-						ami_warning(ami, "Empty line in response event?\n");
+						ami_debug(ami, 2, "Empty line in response event? Probably incomplete...\n");
 					}
 					response_pending = 1;
 				}
@@ -456,8 +458,22 @@ cleanup:
 	return NULL;
 }
 
+void ami_set_callback_data(struct ami_session *ami, void *data)
+{
+	ami->cb_data = data;
+}
+
+void *ami_get_callback_data(struct ami_session *ami)
+{
+	return ami->cb_data;
+}
+
 int ami_disconnect(struct ami_session *ami)
 {
+	if (!ami) {
+		ami_error(ami, "ami_disconnect called with NULL session\n");
+		return -1;
+	}
 	if (ami->ami_socket < 0) {
 		return -1;
 	}
@@ -791,7 +807,7 @@ static void *ami_event_dispatch(void *varg)
 			char *start, *end;
 			res = read(ami->ami_event_pipe[0], buf, AMI_BUFFER_SIZE - 1);
 			if (res < 1) {
-				ami_warning(ami, "read pipe failed?\n");
+				ami_warning(ami, "Failed to read from read pipe (%d): %s\n", res, strerror(errno));
 				break;
 			}
 			/* Be prepared to receive multiple events, or not even a complete one. */
