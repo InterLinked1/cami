@@ -7,7 +7,7 @@
 #
 
 CC		= gcc
-CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O0 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2 -I.
+CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O3 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2 -I.
 EXE		= cami
 SAMPEXES = simpleami amicli
 LIBNAME	= lib$(EXE).so
