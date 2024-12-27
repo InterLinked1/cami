@@ -50,7 +50,7 @@ struct ami_response {
 
 /*!
  * \brief Enable debug logging
- * \param ami
+ * \param ami The AMI session. If NULL, sets the file descriptor for debug logging prior to session creation (e.g. in ami_connect)
  * \param fd File descriptor to which optional debug log messages should be delivered. Default is off (-1)
  * \note This is not recommended for use in production, but may be helpful in a dev environment.
  */
@@ -59,6 +59,7 @@ void ami_set_debug(struct ami_session *ami, int fd);
 /*!
  * \brief Set debug logging level
  * \param ami
+ * \param ami The AMI session. If NULL, sets the debug level prior to session creation (e.g. in ami_connect)
  * \param level Level between 0 and 10. 0 will disable logging, 10 is the most granular. Default is 0.
  * \note A log level of 1 is recommended for production use: this will log all errors and warnings. Use a greater log level for debugging.
  * \retval -1 on failure, non-negative old log level otherwise

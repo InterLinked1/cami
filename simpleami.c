@@ -36,6 +36,8 @@
 static void simple_callback(struct ami_session *ami, struct ami_event *event)
 {
 	const char *eventname = ami_keyvalue(event, "Event");
+	(void) ami;
+
 	printf("(Callback) Event Received: %s\n", eventname);
 #if 0
 	/* Or, you could print out the entire event contents for debugging, or to see what's there: */
@@ -57,8 +59,8 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 	struct ami_session *ami;
 	struct ami_response *resp = NULL;
 #if 0
-	ami_set_debug(STDERR_FILENO); /* Not recommended for daemon programs */
-	ami_set_debug_level(1);
+	ami_set_debug(NULL, STDERR_FILENO); /* Not recommended for daemon programs */
+	ami_set_debug_level(NULL, 1);
 #endif
 	ami = ami_connect(hostname, 0, simple_callback, simple_disconnect_callback);
 	if (!ami) {
@@ -95,6 +97,9 @@ static int simple_ami(const char *hostname, const char *username, const char *pa
 
 int main(int argc,char *argv[])
 {
+	(void) argc;
+	(void) argv;
+
 	if (simple_ami("127.0.0.1", "test", "test")) {
 		exit(EXIT_FAILURE);
 	}

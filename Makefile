@@ -7,38 +7,43 @@
 #
 
 CC		= gcc
-CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O3 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2
+CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O0 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2 -I.
 EXE		= cami
 SAMPEXES = simpleami amicli
-LIBNAME = libcami
-LIBS	= -lm
+LIBNAME	= lib$(EXE).so
+LIBS	= -lm -ldl
 RM		= rm -f
-INSTALL = install
+INSTALL	= install
 
-all : library
+all : library examples
 
 %.o: %.c
 	$(CC) $(CFLAGS) -fPIC -c $^
 
-library: $(EXE).o
+$(LIBNAME): $(EXE).o
 	@echo "== Linking $@"
-	$(CC) -shared -fPIC -o $(LIBNAME).so $^ $(LIBS)
+	$(CC) -shared -fPIC -o $(LIBNAME) $^ $(LIBS)
+
+library: $(LIBNAME)
+	@if [ ! -d /usr/include/$(EXE) ]; then \
+		ln -f -s include $(EXE);           \
+	fi
 
 install:
-	$(INSTALL) -m  755 $(LIBNAME).so "/usr/lib"
+	$(INSTALL) -m 755 $(LIBNAME) "/usr/lib"
 	mkdir -p /usr/include/$(EXE)
-	$(INSTALL) -m 755 include/*.h "/usr/include/$(EXE)/"
+	$(INSTALL) -m 644 include/*.h "/usr/include/$(EXE)/"
 
-simpleami: library install simpleami.o
-	$(CC) $(CFLAGS) -o simpleami simpleami.o -l$(EXE) $(LIBS) -ldl
+simpleami: simpleami.o $(LIBNAME)
+	$(CC) $(CFLAGS) -o $@ $@.o -L. -Wl,-rpath,. -l$(EXE) $(LIBS)
 
-amicli: library install amicli.o
-	$(CC) $(CFLAGS) -o amicli amicli.o -l$(EXE) $(LIBS) -ldl
+amicli: amicli.o $(LIBNAME)
+	$(CC) $(CFLAGS) -o $@ $@.o -L. -Wl,-rpath,. -l$(EXE) $(LIBS)
 
-examples : $(SAMPEXES)
+examples: $(SAMPEXES)
 
-clean :
-	$(RM) *.i *.o $(EXE) $(SAMPEXES) $(LIBNAME).so
+clean:
+	$(RM) *.i *.o $(EXE) $(SAMPEXES) $(LIBNAME)
 
 uninstall:
 	$(RM) /usr/lib/$(EXE).so
@@ -48,5 +53,7 @@ uninstall:
 .PHONY: all
 .PHONY: library
 .PHONY: install
-.PHONY: example
+.PHONY: examples
 .PHONY: clean
+
+# vim: set noexpandtab shiftwidth=4 tabstop=4:
