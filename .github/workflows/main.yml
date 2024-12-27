@@ -45,11 +45,10 @@ jobs:
           echo "write=all" >> /etc/asterisk/manager.conf
           /etc/init.d/asterisk restart
           sleep 3
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Build CAMI and execute simple demo
         run: |
-          cd /usr/src
-          git clone https://github.com/InterLinked1/cami.git
-          cd cami
           make
           make install
           make examples
