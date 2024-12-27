@@ -55,7 +55,7 @@
 	if (ami->debug_level >= level) { \
 		struct timeval tv; \
 		gettimeofday(&tv, NULL); \
-		if (ami->debugfd != -1) dprintf(ami->debugfd, "%llu:%03lu : %d : " fmt, (((long long)tv.tv_sec)), (tv.tv_usec/1000), __LINE__, ## __VA_ARGS__); \
+		if (ami->debugfd != -1) dprintf(ami->debugfd, "%llu:%03lu : %d : " fmt, (((unsigned long long)tv.tv_sec)), (unsigned long)(tv.tv_usec/1000), __LINE__, ## __VA_ARGS__); \
 	} \
 }
 
@@ -101,6 +101,10 @@ struct ami_session {
 	unsigned int return_null_on_error:1;
 };
 
+/* Used for debugging prior to session creation */
+static int ami_initial_debugfd = -1;
+static int ami_initial_debug_level = 0;
+
 static struct ami_session *ami_session_new(void)
 {
 	struct ami_session *ami = calloc(1, sizeof(*ami));
@@ -108,7 +112,8 @@ static struct ami_session *ami_session_new(void)
 		return NULL;
 	}
 	ami->ami_socket = -1;
-	ami->debugfd = -1;
+	ami->debugfd = ami_initial_debugfd;
+	ami->debug_level = ami_initial_debug_level;
 	ami->ami_pipe[0] = ami->ami_pipe[1] = -1;
 	ami->ami_read_pipe[0] = ami->ami_read_pipe[1] = -1;
 	ami->ami_event_pipe[0] = ami->ami_event_pipe[1] = -1;
@@ -358,6 +363,7 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 	int fd;
 	struct sockaddr_in saddr;
 	struct ami_session *ami;
+	int ret;
 
 	ami = ami_session_new();
 	if (!ami) {
@@ -416,13 +422,57 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 		goto cleanup;
 	}
 	ami->ami_socket = fd;
-	inet_pton(AF_INET, hostname, &(saddr.sin_addr));
-	saddr.sin_family = AF_INET;
-	saddr.sin_port = htons(port); /* use network order */
-	if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
-		ami_error(ami, "connect failed: %s\n", strerror(errno));
-		ami_cleanup(ami);
-		goto cleanup;
+	if (inet_pton(AF_INET, hostname, &(saddr.sin_addr)) == 1) {
+		saddr.sin_family = AF_INET;
+		saddr.sin_port = htons(port); /* use network order */
+		if (connect(fd, (struct sockaddr *) &saddr, sizeof(saddr)) < 0) {
+			ami_error(ami, "connect failed: %s\n", strerror(errno));
+			ami_cleanup(ami);
+			goto cleanup;
+		}
+	} else {
+		struct addrinfo hints = {
+			.ai_family = AF_UNSPEC,
+			.ai_socktype = SOCK_STREAM,
+			.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG
+		};
+		struct addrinfo *res;
+
+		if (getaddrinfo(hostname, NULL, &hints, &res) == 0) {
+			if (res->ai_addr == NULL) {
+				freeaddrinfo(res);
+				ami_error(ami, "host %s not valid\n", hostname);
+				ami_cleanup(ami);
+				goto cleanup;
+			}
+
+			switch (res->ai_addr->sa_family) {
+			case AF_INET:
+				((struct sockaddr_in *)res->ai_addr)->sin_port = htons(port);
+				break;
+			case AF_INET6:
+				((struct sockaddr_in6 *)res->ai_addr)->sin6_port = htons(port);
+				break;
+			default:
+				freeaddrinfo(res);
+				ami_error(ami, "address for host %s not valid\n", hostname);
+				ami_cleanup(ami);
+				goto cleanup;
+			}
+
+			if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+				freeaddrinfo(res);
+				ami_error(ami, "connect failed: %s\n", strerror(errno));
+				ami_cleanup(ami);
+				goto cleanup;
+			}
+
+			freeaddrinfo(res);
+		} else {
+			ami_error(ami, "host %s not valid\n", hostname);
+			ami_cleanup(ami);
+			goto cleanup;
+		}
 	}
 	ami->ami_callback = callback;
 	ami->disconnected_callback = dis_callback;
@@ -438,18 +488,37 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 		pthread_mutexattr_destroy(&attr);
 	}
 
-	if (pthread_create(&ami->ami_thread, NULL, ami_loop, ami)) {
-		ami_error(ami, "Unable to create AMI thread: %s\n", strerror(errno));
-		ami_cleanup(ami);
-		goto cleanup;
+	{
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+		ret = pthread_create(&ami->ami_thread, &attr, ami_loop, ami);
+		pthread_attr_destroy(&attr);
+		if (ret) {
+			ami_error(ami, "Unable to create AMI thread: %s\n", strerror(errno));
+			ami_cleanup(ami);
+			goto cleanup;
+		}
 	}
-	if (pthread_create(&ami->dispatch_thread, NULL, ami_event_dispatch, ami)) {
-		ami_error(ami, "Unable to create dispatch thread: %s\n", strerror(errno));
-		ami_cleanup(ami);
-		goto cleanup;
+
+	{
+		pthread_attr_t attr;
+		pthread_attr_init(&attr);
+		pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
+		ret = pthread_create(&ami->dispatch_thread, &attr, ami_event_dispatch, ami);
+		pthread_attr_destroy(&attr);
+		if (ret) {
+			ami_error(ami, "Unable to create dispatch thread: %s\n", strerror(errno));
+			ami_cleanup(ami);
+			goto cleanup;
+		}
 	}
 
 	pthread_mutex_unlock(&ami->ami_read_lock);
+
+	/* establish the initial per-session debug fd and level */
+	ami->debugfd = -1;
+	ami->debug_level = 0;
 	return ami;
 
 cleanup:
@@ -506,20 +575,28 @@ void ami_destroy(struct ami_session *ami)
 
 void ami_set_debug(struct ami_session *ami, int fd)
 {
-	ami->debugfd = fd;
+	if (ami) {
+		ami->debugfd = fd;
+	} else {
+		ami_initial_debugfd = fd;
+	}
 }
 
 int ami_set_debug_level(struct ami_session *ami, int level)
 {
-	int old_level = ami->debug_level;
+	int old_level = ami ? ami->debug_level : ami_initial_debug_level;
 	if (level < 0 || level > 10) {
 		return -1;
 	}
-	ami->debug_level = level;
+	if (ami) {
+		ami->debug_level = level;
+	} else {
+		ami_initial_debug_level = level;
+	}
 	return old_level;
 }
 
-static int __attribute__ ((format (gnu_printf, 4, 5))) __ami_send(struct ami_session *ami, va_list ap, const char *fmt, const char *prefmt, ...)
+static int __attribute__ ((format (printf, 3, 0))) __attribute__ ((format (printf, 4, 5))) __ami_send(struct ami_session *ami, va_list ap, const char *fmt, const char *prefmt, ...)
 {
 	int res = 0;
 	int bytes = 0;
@@ -1040,7 +1117,7 @@ static int ami_wait_for_response(struct ami_session *ami, int msgid)
 	}
 }
 
-static int ami_send(struct ami_session *ami, const char *action, const char *fmt, ...)
+static int __attribute__ ((format (printf, 3, 4))) ami_send(struct ami_session *ami, const char *action, const char *fmt, ...)
 {
 	int res;
 
@@ -1053,7 +1130,7 @@ static int ami_send(struct ami_session *ami, const char *action, const char *fmt
 	return res;
 }
 
-struct ami_response *ami_action(struct ami_session *ami, const char *action, const char *fmt, ...)
+struct ami_response * __attribute__ ((format (printf, 3, 4))) ami_action(struct ami_session *ami, const char *action, const char *fmt, ...)
 {
 	struct ami_response *resp = NULL;
 	/* Remember: no trailing \r\n in fmt !*/

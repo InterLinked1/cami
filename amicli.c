@@ -148,7 +148,7 @@ int main(int argc,char *argv[])
 	int debug = 0;
 	struct ami_session *ami;
 
-	while ((c = getopt(argc, argv, getopt_settings)) != -1) {
+	while ((c = getopt(argc, argv, getopt_settings)) != (char) -1) {
 		switch (c) {
 		case '?':
 		case 'd':
