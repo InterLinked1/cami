@@ -15,6 +15,13 @@ LIBS	= -lm -ldl
 RM		= rm -f
 INSTALL	= install
 
+# We do not normally build the examples unless asked,
+# since they are not needed for library-only installs.
+library: $(LIBNAME)
+	@if [ ! -d /usr/include/$(EXE) ]; then \
+		ln -f -s include $(EXE);           \
+	fi
+
 all : library examples
 
 %.o: %.c
@@ -23,11 +30,6 @@ all : library examples
 $(LIBNAME): $(EXE).o
 	@echo "== Linking $@"
 	$(CC) -shared -fPIC -o $(LIBNAME) $^ $(LIBS)
-
-library: $(LIBNAME)
-	@if [ ! -d /usr/include/$(EXE) ]; then \
-		ln -f -s include $(EXE);           \
-	fi
 
 install:
 	$(INSTALL) -m 755 $(LIBNAME) "/usr/lib"

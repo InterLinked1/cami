@@ -3,7 +3,7 @@ name: CI
 on:
   # Triggers the workflow on push or pull request events but only for the master branch
   push:
-    branches: [ master ]
+    branches: [ master, dev ]
   pull_request:
     branches: [ master ]
 
@@ -14,6 +14,7 @@ on:
 jobs:
   debian-12:
     runs-on: ubuntu-latest
+    name: Debian 12
     container: debian:12
     steps:
       - name: Build Asterisk
@@ -21,11 +22,11 @@ jobs:
           cd /usr/src
           apt-get update -y
           apt-get install -y wget
-          wget https://docs.phreaknet.org/script/phreaknet.sh
+          wget https://raw.githubusercontent.com/InterLinked1/phreakscript/refs/heads/master/phreaknet.sh
           chmod +x phreaknet.sh
           ./phreaknet.sh make
           phreaknet update
-          phreaknet install
+          phreaknet install --fast --lightweight
           echo "" > /etc/asterisk/manager.conf
           echo "[general]" >> /etc/asterisk/manager.conf
           echo "enabled = yes" >> /etc/asterisk/manager.conf
@@ -34,6 +35,7 @@ jobs:
           echo "secret=test" >> /etc/asterisk/manager.conf
           echo "read=all" >> /etc/asterisk/manager.conf
           echo "write=all" >> /etc/asterisk/manager.conf
+          sleep 1
           /etc/init.d/asterisk restart
           sleep 3
       - name: Checkout
@@ -51,9 +53,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Build CAMI and execute simple demo
+      - name: Build CAMI
         run: |
           dnf install -y make gcc
           make
           make install
           make examples
+  freebsd-14:
+    runs-on: ubuntu-24.04
+    name: FreeBSD
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CAMI
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          run: |
+            pkg install -y gcc gmake
+            gmake
+            gmake install
+            gmake examples
