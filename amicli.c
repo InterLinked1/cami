@@ -24,6 +24,8 @@
 
 #include <cami/cami.h>
 
+static int debug = 0;
+
 /*
  * This is a simple program that will use C AMI to log in,
  * and then accepts AMI commands on STDIN
@@ -37,10 +39,12 @@ static void ami_callback(struct ami_session *ami, struct ami_event *event)
 {
 	const char *eventname = ami_keyvalue(event, "Event");
 	(void) ami;
-	printf("(Callback) Event Received: %s\n", eventname);
-#ifdef PRINT_EVENTS
-	ami_dump_event(event); /* Do something with event */
-#endif
+	if (debug >= 1) {
+		printf("(Callback) Event Received: %s\n", eventname);
+	}
+	if (debug >= 2) {
+		ami_dump_event(event); /* Do something with event */
+	}
 	ami_event_free(event); /* Free event when done with it */
 }
 
@@ -133,7 +137,9 @@ static int single_ami_command(struct ami_session *ami)
 		fprintf(stderr, "AMI action '%s' failed\n", action);
 		return -1;
 	}
-	ami_dump_response(resp);
+	if (debug >= 1) {
+		ami_dump_response(resp);
+	}
 	ami_resp_free(resp); /* Free response when done with it (just LF or CR LF) */
 	return 1;
 }
@@ -145,7 +151,6 @@ int main(int argc,char *argv[])
 	char ami_host[92] = "127.0.0.1"; /* Default to localhost */
 	char ami_username[64] = "";
 	char ami_password[64] = "";
-	int debug = 0;
 	struct ami_session *ami;
 
 	while ((c = getopt(argc, argv, getopt_settings)) != (char) -1) {
@@ -198,11 +203,14 @@ int main(int argc,char *argv[])
 		return -1;
 	}
 
+	ami_set_debug_level(NULL, debug);
+	ami_set_debug(NULL, STDERR_FILENO);
 	ami = ami_connect(ami_host, 0, ami_callback, ami_disconnect_callback);
 	if (!ami) {
 		fprintf(stderr, "Failed to connect to %s\n", ami_host);
 		return -1;
 	}
+
 	ami_set_debug_level(ami, debug);
 	ami_set_debug(ami, STDERR_FILENO);
 	ami_set_discard_on_failure(ami, 0);
@@ -211,7 +219,9 @@ int main(int argc,char *argv[])
 		return -1;
 	}
 
-	fprintf(stderr, "*** Successfully logged in to AMI on %s (%s) ***\n", ami_host, ami_username);
+	if (debug >= 1) {
+		fprintf(stderr, "*** Successfully logged in to AMI on %s (%s) ***\n", ami_host, ami_username);
+	}
 	while (single_ami_command(ami) > 0);
 	ami_disconnect(ami);
 	ami_destroy(ami);
