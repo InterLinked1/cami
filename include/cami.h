@@ -57,8 +57,14 @@ struct ami_response {
 void ami_set_debug(struct ami_session *ami, int fd);
 
 /*!
+ * \brief Get debug logging level
+ * \param ami The AMI session. If NULL, sets the debug level prior to session creation (e.g. in ami_connect)
+ * \retval Current debug Level. 0 will disable logging, 10 is the most granular. Default is 0.
+ */
+int ami_debug_level(struct ami_session *ami);
+
+/*!
  * \brief Set debug logging level
- * \param ami
  * \param ami The AMI session. If NULL, sets the debug level prior to session creation (e.g. in ami_connect)
  * \param level Level between 0 and 10. 0 will disable logging, 10 is the most granular. Default is 0.
  * \note A log level of 1 is recommended for production use: this will log all errors and warnings. Use a greater log level for debugging.

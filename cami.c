@@ -582,6 +582,11 @@ void ami_set_debug(struct ami_session *ami, int fd)
 	}
 }
 
+int ami_debug_level(struct ami_session *ami)
+{
+	return ami ? ami->debug_level : ami_initial_debug_level;
+}
+
 int ami_set_debug_level(struct ami_session *ami, int level)
 {
 	int old_level = ami ? ami->debug_level : ami_initial_debug_level;
