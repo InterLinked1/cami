@@ -1135,12 +1135,11 @@ static int __attribute__ ((format (printf, 3, 4))) ami_send(struct ami_session *
 	return res;
 }
 
-struct ami_response * __attribute__ ((format (printf, 3, 4))) ami_action(struct ami_session *ami, const char *action, const char *fmt, ...)
+struct ami_response * __attribute__ ((format (printf, 3, 0))) ami_action_va(struct ami_session *ami, const char *action, const char *fmt, va_list ap)
 {
 	struct ami_response *resp = NULL;
 	/* Remember: no trailing \r\n in fmt !*/
 	int res, actionid;
-	va_list ap;
 
 	if (ami->ami_socket < 0) {
 		/* Connection got shutdown */
@@ -1156,10 +1155,8 @@ struct ami_response * __attribute__ ((format (printf, 3, 4))) ami_action(struct 
 	/* Nobody sends anything else until we get our response. */
 	pthread_mutex_lock(&ami->ami_read_lock);
 
-	va_start(ap, fmt);
 	/* If we don't have a user-supplied format string, don't add \r\n after ActionID or we'll get 3 sets in a row and cause Asterisk to whine. */
 	res = __ami_send(ami, ap, fmt, fmt && *fmt ? "Action:%s\r\nActionID:%d\r\n" : "Action:%s\r\nActionID:%d", action, ++ami->ami_msg_id);
-	va_end(ap);
 
 	actionid = ami->ami_msg_id; /* This is the ActionID we expect in our response */
 
@@ -1192,6 +1189,17 @@ struct ami_response * __attribute__ ((format (printf, 3, 4))) ami_action(struct 
 		}
 	}
 
+	return resp;
+}
+
+struct ami_response * __attribute__ ((format (printf, 3, 4))) ami_action(struct ami_session *ami, const char *action, const char *fmt, ...)
+{
+	struct ami_response *resp = NULL;
+	va_list ap;
+
+	va_start(ap, fmt);
+	resp = ami_action_va(ami, action, fmt, ap);
+	va_end(ap);
 	return resp;
 }
 

@@ -17,8 +17,8 @@
  */
 
 #define CAMI_VERSION_MAJOR 0
-#define CAMI_VERSION_MINOR 2
-#define CAMI_VERSION_PATCH 1
+#define CAMI_VERSION_MINOR 3
+#define CAMI_VERSION_PATCH 0
 
 /* Max wait time in ms. Don't be tempted to make this too big, as this blocks all AMI traffic. Most of the time, it shouldn't really matter though. */
 #define AMI_MAX_WAIT_TIME 1000
@@ -161,6 +161,9 @@ int ami_action_login(struct ami_session *ami, const char *username, const char *
  * \note This is a convenience function and will only work in the most simplistic cases (same host, user with read access to /etc/asterisk/manager.conf)
  */
 int ami_auto_detect_ami_pass(const char *amiusername, char *buf, size_t buflen);
+
+/*! \brief Same as ami_action, but accepts a va_list, for convenience when calling from a variadic function */
+struct ami_response *ami_action_va(struct ami_session *ami, const char *action, const char *fmt, va_list ap);
 
 /*!
  * \brief Request a custom AMI action
