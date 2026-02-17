@@ -351,13 +351,6 @@ static void *ami_loop(void *varg)
 	return NULL;
 }
 
-/* Try to prevent user applications from blowing things up.
- * If ami_connect is called by users when it shouldn't be,
- * that could result in starting up multiple AMI connections,
- * and then all hell really breaks loose.
- * Even though that's a user bug, try to prevent that. */
-#define REJECT_DUPLICATE_RECONNECTS 1
-
 struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
 {
 	int fd;
@@ -372,21 +365,6 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 
 	pthread_mutex_init(&ami->ami_read_lock, NULL);
 	pthread_mutex_lock(&ami->ami_read_lock);
-	if (ami->ami_socket >= 0) {
-		/* Should pretty much NEVER happen on a clean cleanup
-		 * WILL happen if we reconnect from the disconnect callback */
-		ami_warning(ami, "Hmm... socket already registered?\n");
-		/*
-		 * Just continue and overwrite everything.
-		 * It just means that somebody probably called ami_connect twice
-		 * without disconnecting inbetween...
-		 */
-		if (REJECT_DUPLICATE_RECONNECTS) {
-			ami_warning(ami, "Rejecting duplicate AMI connection!\n"); /* Somebody's trying to connect again while there's a connection in progress? */
-			goto cleanup;
-		}
-		ami_cleanup(ami); /* Disconnect to prevent a resource leak */
-	}
 
 	memset(&saddr, 0, sizeof(saddr));
 	if (!port) {
