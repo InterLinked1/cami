@@ -17,7 +17,7 @@
  */
 
 #define CAMI_VERSION_MAJOR 0
-#define CAMI_VERSION_MINOR 3
+#define CAMI_VERSION_MINOR 4
 #define CAMI_VERSION_PATCH 0
 
 /* Max wait time in ms. Don't be tempted to make this too big, as this blocks all AMI traffic. Most of the time, it shouldn't really matter though. */
@@ -73,11 +73,24 @@ int ami_debug_level(struct ami_session *ami);
 int ami_set_debug_level(struct ami_session *ami, int level);
 
 /*!
- * \brief Initialize an AMI connection with Asterisk
+ * \brief Initialize an AMI session from an open file descriptor (TCP connection to Asterisk already established)
+ * \param rfd File descriptor from which to read
+ * \param wfd File descriptor to which to write
+ * \param callback Callback function for AMI events (not including responses to actions).
+ * \param dis_callback Callback function if Asterisk disconnects our AMI connection. NOT invoked when ami_disconnect is called. This function is blocking so don't do anything too crazy inside.
+ * \note This is a lower-level variant of ami_connect(), useful if you set up the connection yourself, e.g. for TLS encryption
+ * \return NULL on failure
+ * \return AMI session on success
+ */
+struct ami_session *ami_session_from_fd(int rfd, int wfd, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami));
+
+/*!
+ * \brief Initialize an AMI session and establish a TCP connection to Asterisk
  * \param hostname Hostname (use 127.0.0.1 for localhost)
  * \param port Port number. Use 0 for the default port (5038)
  * \param callback Callback function for AMI events (not including responses to actions).
  * \param dis_callback Callback function if Asterisk disconnects our AMI connection. NOT invoked when ami_disconnect is called. This function is blocking so don't do anything too crazy inside.
+ * \note AMI connections established using this function are not encrypted. If encryption is required, set up the connection yourself and use ami_session_from_fd()
  * \return NULL on failure
  * \return AMI session on success
  */

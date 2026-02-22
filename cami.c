@@ -79,7 +79,8 @@ struct ami_session {
 	pthread_t dispatch_thread;
 	pthread_mutex_t ami_read_lock;	/* Reading is protected by the ami_read_lock */
 	struct ami_response *current_response;
-	int ami_socket;
+	int ami_rfd;			/* Read file descriptor (typically socket fd) */
+	int ami_wfd;			/* Write file descriptor (typically socket fd) */
 	int debugfd;
 	int debug_level;
 	int ami_pipe[2]; 		/* Pipe for sending actions to Asterisk */
@@ -92,6 +93,9 @@ struct ami_session {
 	int tx;
 	int rx;
 	unsigned int loggedin:1;
+	unsigned int active:1;	/* AMI session still running, set to 0 when it's time to exit */
+	unsigned int loop_running:1;
+	unsigned int dispatchbusy:1;	/* Dispatch thread has called a user callback */
 	/* Rather than return failed action responses to the user, return NULL.
 	 * Errors will be logged to log level 2.
 	 * This can make application development easier as you can check for NULL
@@ -111,13 +115,15 @@ static struct ami_session *ami_session_new(void)
 	if (!ami) {
 		return NULL;
 	}
-	ami->ami_socket = -1;
+	ami->ami_rfd = -1;
+	ami->ami_wfd = -1;
 	ami->debugfd = ami_initial_debugfd;
 	ami->debug_level = ami_initial_debug_level;
 	ami->ami_pipe[0] = ami->ami_pipe[1] = -1;
 	ami->ami_read_pipe[0] = ami->ami_read_pipe[1] = -1;
 	ami->ami_event_pipe[0] = ami->ami_event_pipe[1] = -1;
 	ami->return_null_on_error = 1;
+	ami->active = 1;
 	return ami;
 }
 
@@ -129,19 +135,28 @@ static void ami_event_handle(struct ami_session *ami, char *data);
 
 static void close_pipes(struct ami_session *ami)
 {
-	close(ami->ami_pipe[0]);
 	close(ami->ami_pipe[1]);
-	close(ami->ami_read_pipe[0]);
 	close(ami->ami_read_pipe[1]);
-	close(ami->ami_event_pipe[0]);
 	close(ami->ami_event_pipe[1]);
+
+	close(ami->ami_pipe[0]);
+	close(ami->ami_read_pipe[0]);
+	close(ami->ami_event_pipe[0]);
 }
 
 static void ami_cleanup(struct ami_session *ami)
 {
-	close(ami->ami_socket);
 	close_pipes(ami);
-	ami->ami_socket = -1;
+
+	/* Close read/write file descriptor, if it's the same.
+	 * If they are different, that means the application passed us file descriptors to use,
+	 * and we don't touch those. */
+	if (ami->ami_wfd == ami->ami_rfd && ami->ami_rfd != -1) {
+		close(ami->ami_rfd);
+		ami->ami_rfd = -1;
+		ami->ami_wfd = -1;
+	}
+
 	ami->loggedin = 0;
 	ami->tx = ami->rx = 0;
 	if (ami->current_response) {
@@ -162,17 +177,18 @@ static void *ami_loop(void *varg)
 	struct ami_session *ami;
 
 	ami = varg;
-	if (ami->ami_socket < 0) {
+	if (ami->ami_rfd < 0) {
 		return NULL;
 	}
 
-	fds[0].fd = ami->ami_socket;
+	fds[0].fd = ami->ami_rfd;
 	fds[0].events = POLLIN;
 	fds[1].fd = ami->ami_pipe[0];
 	fds[1].events = POLLIN;
 
 	readinbuf = lasteventstart = laststart = inbuf;
 
+	ami->loop_running = 1;
 	for (;;) {
 		res = poll(fds, event_pending || response_pending ? 1 : 2, -1); /* If we're in the middle of reading a response, don't accept any actions to send to Asterisk. */
 		pthread_testcancel();
@@ -184,8 +200,11 @@ static void *ami_loop(void *varg)
 		}
 		/* Data from AMI to deliver to consumer? */
 		if (fds[0].revents) {
-			res = recv(ami->ami_socket, readinbuf, AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf), 0);
+			res = read(ami->ami_rfd, readinbuf, AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf));
 			if (res < 1) {
+				if (res < 0) {
+					ami_debug(ami, 1, "read failed: %s\n", strerror(errno));
+				}
 				break;
 			}
 			/* This prevents part of the last response from persisting in msg if that one was longer. */
@@ -199,10 +218,10 @@ static void *ami_loop(void *varg)
 			 * so using readinbuf (which is what we got THIS read) is WRONG. */
 			nextevent = lasteventstart;
 
-			/* It is completely possible that we finished reading from the socket but the current response isn't finished yet. */
+			/* It is completely possible that we finished reading from ami_rfd but the current response isn't finished yet. */
 			if (got_id) { /* The initial ID from Asterisk that we've connected to AMI is the only thing we get that's not an event */
 				/* There are two problems we're concerned about:
-				 * One is we finish reading from the socket before we get the entire response (if it is a response).
+				 * One is we finish reading from ami_rfd before we get the entire response (if it is a response).
 				 * Two is we read more than an entire event/response and we have multiple events on our hands.
 				 * Here, we try to address both of these potential issues that could arise.
 				 */
@@ -279,7 +298,7 @@ static void *ami_loop(void *varg)
 
 				/* If *nextevent, that means that there's still data remaining from what we already read, but we haven't finished reading yet.
 				 * i.e. we have some data but no trailing AMI_EOM so we have a partial event or response available.
-				 * XXX Sometimes these 2 branches are triggered when it takes multiple socket reads to receive the entire response.
+				 * XXX Sometimes these 2 branches are triggered when it takes multiple reads to receive the entire response.
 				 * Don't think anything's actually wrong in that case. */
 
 				if (!event_pending && *nextevent) {
@@ -337,13 +356,14 @@ static void *ami_loop(void *varg)
 				ami_debug(ami, 1, "read returned %d\n", res);
 				break;
 			}
-			res = write(ami->ami_socket, outbuf, res);
+			res = write(ami->ami_wfd, outbuf, res);
 			if (res < 1) {
-				ami_warning(ami, "write returned %d\n", res);
+				ami_warning(ami, "write(%d) returned %d: %s\n", ami->ami_wfd, res, strerror(errno));
 				break;
 			}
 		}
 	}
+	ami->loop_running = 0;
 	ami_cleanup(ami);
 	if (ami->disconnected_callback) {
 		ami->disconnected_callback(ami); /* let the caller know we're being forced to exit (e.g. by Asterisk) */
@@ -351,20 +371,95 @@ static void *ami_loop(void *varg)
 	return NULL;
 }
 
+static int common_init(struct ami_session *ami)
+{
+	int ret;
+
+	ami->ami_msg_id = 0;
+	ami->loggedin = 0;
+	ami->tx = ami->rx = 0;
+
+	/* establish the initial per-session debug fd and level */
+	ami->debugfd = -1;
+	ami->debug_level = 0;
+
+	pthread_mutex_init(&ami->ami_read_lock, NULL);
+	pthread_mutex_lock(&ami->ami_read_lock);
+
+#define CLOSE_PIPE_PAIR(pipepair) close(pipepair[0]); close(pipepair[1]);
+
+	/* If we can't make a pipe, forget about the socket. */
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_pipe)) {
+		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
+		pthread_mutex_unlock(&ami->ami_read_lock);
+		return -1;
+	}
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_read_pipe)) {
+		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
+		CLOSE_PIPE_PAIR(ami->ami_pipe);
+		pthread_mutex_unlock(&ami->ami_read_lock);
+		return -1;
+	}
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_event_pipe)) {
+		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
+		CLOSE_PIPE_PAIR(ami->ami_pipe);
+		CLOSE_PIPE_PAIR(ami->ami_read_pipe);
+		pthread_mutex_unlock(&ami->ami_read_lock);
+		return -1;
+	}
+
+	/* Create the threads last, since they will start using the file descriptors above,
+	 * so we need to be ready to go at this point with all file descriptors available. */
+	ret = pthread_create(&ami->ami_thread, NULL, ami_loop, ami);
+	if (ret) {
+		ami_error(ami, "Unable to create AMI thread: %s\n", strerror(errno));
+		CLOSE_PIPE_PAIR(ami->ami_pipe);
+		CLOSE_PIPE_PAIR(ami->ami_read_pipe);
+		pthread_mutex_unlock(&ami->ami_read_lock);
+		return -1;
+	}
+	ret = pthread_create(&ami->dispatch_thread, NULL, ami_event_dispatch, ami);
+	if (ret) {
+		ami_error(ami, "Unable to create dispatch thread: %s\n", strerror(errno));
+		CLOSE_PIPE_PAIR(ami->ami_pipe);
+		CLOSE_PIPE_PAIR(ami->ami_read_pipe);
+		pthread_mutex_unlock(&ami->ami_read_lock);
+		return -1;
+	}
+#undef CLOSE_PIPE_PAIR
+
+	pthread_mutex_unlock(&ami->ami_read_lock);
+	return 0;
+}
+
+struct ami_session *ami_session_from_fd(int rfd, int wfd, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
+{
+	struct ami_session *ami = ami_session_new();
+	if (!ami) {
+		return NULL;
+	}
+	ami->ami_rfd = rfd;
+	ami->ami_wfd = wfd;
+	ami->ami_callback = callback;
+	ami->disconnected_callback = dis_callback;
+	if (common_init(ami)) {
+		ami_cleanup(ami);
+		ami_destroy(ami);
+		return NULL;
+	}
+	return ami;
+}
+
 struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
 {
 	int fd;
 	struct sockaddr_in saddr;
 	struct ami_session *ami;
-	int ret;
 
 	ami = ami_session_new();
 	if (!ami) {
 		return NULL;
 	}
-
-	pthread_mutex_init(&ami->ami_read_lock, NULL);
-	pthread_mutex_lock(&ami->ami_read_lock);
 
 	memset(&saddr, 0, sizeof(saddr));
 	if (!port) {
@@ -373,33 +468,13 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 
 	ami_debug(ami, 1, "Initiating AMI connection on port %d\n", port);
 
-	/* If we can't make a pipe, forget about the socket. */
-	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_pipe)) {
-		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
-		goto cleanup;
-	}
-	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_read_pipe)) {
-		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
-		close(ami->ami_pipe[0]);
-		close(ami->ami_pipe[1]);
-		goto cleanup;
-	}
-	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, ami->ami_event_pipe)) {
-		ami_error(ami, "Unable to create pipe: %s\n", strerror(errno));
-		close(ami->ami_pipe[0]);
-		close(ami->ami_pipe[1]);
-		close(ami->ami_read_pipe[0]);
-		close(ami->ami_read_pipe[1]);
-		goto cleanup;
-	}
-
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
 		ami_error(ami, "Failed to create socket: %s\n", strerror(errno));
 		close_pipes(ami);
 		goto cleanup;
 	}
-	ami->ami_socket = fd;
+	ami->ami_rfd = ami->ami_wfd = fd;
 	if (inet_pton(AF_INET, hostname, &(saddr.sin_addr)) == 1) {
 		saddr.sin_family = AF_INET;
 		saddr.sin_port = htons(port); /* use network order */
@@ -452,55 +527,17 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 			goto cleanup;
 		}
 	}
+
 	ami->ami_callback = callback;
 	ami->disconnected_callback = dis_callback;
-	ami->ami_msg_id = 0;
-	ami->loggedin = 0;
-	ami->tx = ami->rx = 0;
-
-	{
-		pthread_mutexattr_t attr;
-		pthread_mutexattr_init(&attr);
-		pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-		pthread_mutex_init(&ami->ami_read_lock, &attr);
-		pthread_mutexattr_destroy(&attr);
+	if (common_init(ami)) {
+		ami_cleanup(ami);
+		goto cleanup;
 	}
 
-	{
-		pthread_attr_t attr;
-		pthread_attr_init(&attr);
-		pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
-		ret = pthread_create(&ami->ami_thread, &attr, ami_loop, ami);
-		pthread_attr_destroy(&attr);
-		if (ret) {
-			ami_error(ami, "Unable to create AMI thread: %s\n", strerror(errno));
-			ami_cleanup(ami);
-			goto cleanup;
-		}
-	}
-
-	{
-		pthread_attr_t attr;
-		pthread_attr_init(&attr);
-		pthread_attr_setstacksize(&attr, 2 * 1024 * 1024);
-		ret = pthread_create(&ami->dispatch_thread, &attr, ami_event_dispatch, ami);
-		pthread_attr_destroy(&attr);
-		if (ret) {
-			ami_error(ami, "Unable to create dispatch thread: %s\n", strerror(errno));
-			ami_cleanup(ami);
-			goto cleanup;
-		}
-	}
-
-	pthread_mutex_unlock(&ami->ami_read_lock);
-
-	/* establish the initial per-session debug fd and level */
-	ami->debugfd = -1;
-	ami->debug_level = 0;
 	return ami;
 
 cleanup:
-	pthread_mutex_unlock(&ami->ami_read_lock);
 	ami_destroy(ami);
 	return NULL;
 }
@@ -521,24 +558,33 @@ int ami_disconnect(struct ami_session *ami)
 		ami_error(ami, "ami_disconnect called with NULL session\n");
 		return -1;
 	}
-	if (ami->ami_socket < 0) {
+	if (ami->ami_rfd < 0) {
+		ami_debug(ami, 1, "ami_disconnect called with no read fd active\n");
 		return -1;
 	}
 
 	if (ami->ami_thread) {
-		pthread_cancel(ami->ami_thread);
-		pthread_kill(ami->ami_thread, SIGURG);
+		if (ami->loop_running) {
+			/* Only cancel the thread if it's executing code in libcami.
+			 * If it's executing callback code, then we can't do this,
+			 * or we might screw up the user's application. */
+			pthread_cancel(ami->ami_thread);
+			pthread_kill(ami->ami_thread, SIGURG);
+		}
 		pthread_join(ami->ami_thread, NULL);
 		ami->ami_thread = 0;
 	}
 	if (ami->dispatch_thread) {
-		pthread_cancel(ami->dispatch_thread);
-		pthread_kill(ami->dispatch_thread, SIGURG);
+		/* Similar thing here - we don't disturb this thread if it's running user callbacks. */
+		if (!ami->dispatchbusy) {
+			pthread_cancel(ami->dispatch_thread);
+			pthread_kill(ami->dispatch_thread, SIGURG);
+		}
 		pthread_join(ami->dispatch_thread, NULL);
 		ami->dispatch_thread = 0;
 	}
 
-	if (ami->ami_socket >= 0) {
+	if (ami->ami_rfd >= 0) {
 		ami_debug(ami, 2, "Since we killed the AMI connection, manually cleaning up\n");
 		ami_cleanup(ami);
 	}
@@ -653,8 +699,8 @@ static int __attribute__ ((format (printf, 3, 0))) __attribute__ ((format (print
 
 	ami_debug(ami, 4, "==> AMI Action:\n%s", fullbuf); /* There's already (multiple) new lines at the end, don't add more */
 	bytes = write(ami->ami_pipe[1], fullbuf, len);
-	if (bytes < 1) {
-		ami_warning(ami, "Failed to write to pipe\n");
+	if (bytes != len) {
+		ami_warning(ami, "Failed to write to pipe %d: %s\n", ami->ami_pipe[1], strerror(errno));
 		res = -1;
 	}
 
@@ -854,7 +900,7 @@ static void *ami_event_dispatch(void *varg)
 	fds.fd = ami->ami_event_pipe[0];
 	fds.events = POLLIN;
 
-	for (;;) {
+	do {
 		res = poll(&fds, 1, -1);
 		if (res < 0) {
 			if (errno == EINTR) {
@@ -867,7 +913,7 @@ static void *ami_event_dispatch(void *varg)
 			char *start, *end;
 			res = read(ami->ami_event_pipe[0], buf, AMI_BUFFER_SIZE - 1);
 			if (res < 1) {
-				ami_warning(ami, "Failed to read from read pipe (%d): %s\n", res, strerror(errno));
+				ami_warning(ami, "Failed to read from read pipe (%d): %s\n", ami->ami_event_pipe[0], strerror(errno));
 				break;
 			}
 			/* Be prepared to receive multiple events, or not even a complete one. */
@@ -890,13 +936,14 @@ static void *ami_event_dispatch(void *varg)
 				/*! \todo XXX BUGBUG Unlikely, but we should really wait for the null terminator, as the event may be incomplete here on partial read. */
 				start[res - 1] = '\0';
 				event = ami_parse_event(ami, start);
+				ami->dispatchbusy = 1;
 				ami->ami_callback(ami, event); /* Provide the user with the original event, user is responsible for freeing */
+				ami->dispatchbusy = 0;
 			}
 		}
-	}
+	} while (ami->active);
 
 	ami_debug(ami, 2, "Event dispatch thread exiting\n");
-
 	return NULL;
 }
 
@@ -907,10 +954,10 @@ static void ami_event_handle(struct ami_session *ami, char *data)
 			ami_warning(ami, "Unexpected identification: '%s'\n", data);
 		} else {
 			/* Assume we're good to go. */
-			if (write(ami->ami_read_pipe[1], "0", 2) < 1) { /* Add 1 for null terminator */
-				ami_warning(ami, "Couldn't write to read pipe?\n");
-			}
 			ami_debug(ami, 2, "*** Initialized Asterisk Manager Interface: %s", data); /* No newline, Asterisk ID contains one */
+			if (write(ami->ami_read_pipe[1], "0", 2) < 1) { /* Add 1 for null terminator */
+				ami_warning(ami, "Couldn't write to read pipe %d: %s\n", ami->ami_read_pipe[1], strerror(errno));
+			}
 		}
 		return;
 	}
@@ -962,7 +1009,7 @@ static void ami_event_handle(struct ami_session *ami, char *data)
 			}
 			ami->current_response = resp;
 			if (write(ami->ami_read_pipe[1], buf, strlen(buf) + 1) < 1) { /* Add 1 for null terminator */
-				ami_warning(ami, "Couldn't write to read pipe?\n");
+				ami_warning(ami, "Couldn't write to read pipe %d: %s\n", ami->ami_read_pipe[1], strerror(errno));
 			}
 
 			/*
@@ -1043,7 +1090,7 @@ static void ami_event_handle(struct ami_session *ami, char *data)
 			rtrim(data); /* ami_parse_event expects NO trailing newlines at the end. */
 			bytes = write(ami->ami_event_pipe[1], data, strlen(data) + 1); /* Include null terminator. */
 			if (bytes < 1) {
-				ami_warning(ami, "Failed to write to pipe\n");
+				ami_warning(ami, "Failed to write to pipe %d: %s\n", ami->ami_event_pipe[1], strerror(errno));
 			}
 		}
 		return;
@@ -1083,7 +1130,7 @@ static int ami_wait_for_response(struct ami_session *ami, int msgid)
 			int eventnum;
 			char buf[AMI_MAX_ACTIONID_STRLEN];
 			if (read(ami->ami_read_pipe[0], buf, AMI_MAX_ACTIONID_STRLEN) < 1) {
-				ami_warning(ami, "read pipe failed?\n");
+				ami_warning(ami, "read pipe (%d) failed? (%s)\n", ami->ami_read_pipe[0], strerror(errno));
 				return -1;
 			}
 			eventnum = atoi(buf);
@@ -1119,7 +1166,7 @@ struct ami_response * __attribute__ ((format (printf, 3, 0))) ami_action_va(stru
 	/* Remember: no trailing \r\n in fmt !*/
 	int res, actionid;
 
-	if (ami->ami_socket < 0) {
+	if (ami->ami_rfd < 0) {
 		/* Connection got shutdown */
 		ami_error(ami, "Can't send AMI action without active socket\n");
 		return NULL;
@@ -1186,7 +1233,7 @@ int ami_action_login(struct ami_session *ami, const char *username, const char *
 	struct ami_response *resp;
 	int res;
 
-	if (ami->ami_socket < 0) {
+	if (ami->ami_wfd < 0) {
 		/* Chance of us getting booted between when established the connection
 		 * and now are basically nil, but check anyways, just in case.
 		 */
