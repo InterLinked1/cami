@@ -11,7 +11,9 @@ The program is named CAMI as it takes its cue from AMI libraries for other langu
 
 You may simply statically compile your program with `cami.c` and include the CAMI header files where needed.
 
-Alternately, you may build and install the library by running `make install`.
+Alternately, you may build and install the library by running `make install` (this is the recommended approach).
+
+`cami` links with OpenSSL by default for TLS support, but this is optional. You can disable this by setting `HAVE_OPENSSL` to 0 in the Makefile.
 
 ## Usage
 

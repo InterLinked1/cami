@@ -6,6 +6,10 @@
 # Naveen Albert <asterisk@phreaknet.org>
 #
 
+# Compile the library with TLS support, using OpenSSL
+# If you don't have OpenSSL, you can disable TLS support by setting this to 0
+HAVE_OPENSSL = 1
+
 CC		= gcc
 # Without -fPIC in CFLAGS, linking fails on FreeBSD: relocation R_X86_64_32 against `.rodata.str1.8' can not be used when making a shared object; recompile with -fPIC
 CFLAGS = -Wall -Werror -Wno-unused-parameter -Wextra -Wstrict-prototypes -Wmissing-prototypes -Wdeclaration-after-statement -Wmissing-declarations -Wmissing-format-attribute -Wformat=2 -Wshadow -std=gnu99 -pthread -O3 -g -Wstack-protector -fno-omit-frame-pointer -D_FORTIFY_SOURCE=2 -fPIC -I.
@@ -13,6 +17,10 @@ EXE		= cami
 SAMPEXES = simpleami amicli
 LIBNAME	= lib$(EXE).so
 LIBS	= -lm -ldl
+ifeq ($(HAVE_OPENSSL),1)
+CFLAGS += -DHAVE_OPENSSL
+LIBS += -lssl -lcrypto
+endif
 RM		= rm -f
 INSTALL	= install
 

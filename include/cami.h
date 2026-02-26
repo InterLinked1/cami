@@ -97,6 +97,12 @@ struct ami_session *ami_session_from_fd(int rfd, int wfd, void (*callback)(struc
 struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami));
 
 /*!
+ * \brief Same as ami_connect, but establish an encrypted connection using TLS, and if port is 0, it will default to 5039.
+ * \note This function only works if HAVE_OPENSSL is enabled in Makefile.
+ */
+struct ami_session *ami_ssl_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami));
+
+/*!
  * \brief Set callback data
  * \param ami
  * \param data

@@ -55,7 +55,21 @@ jobs:
         uses: actions/checkout@v4
       - name: Build CAMI
         run: |
+          dnf install -y make gcc openssl-devel
+          make
+          make install
+          make examples
+  fedora-42-nossl:
+    runs-on: ubuntu-24.04
+    name: Fedora 42, no SSL
+    container: fedora:42
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build CAMI
+        run: |
           dnf install -y make gcc
+          sed -i 's|HAVE_OPENSSL = 1|HAVE_OPENSSL = 0|' Makefile
           make
           make install
           make examples

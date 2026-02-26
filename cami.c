@@ -41,8 +41,17 @@
 
 #include "include/cami.h"
 
+#ifdef HAVE_OPENSSL
+#include <openssl/opensslv.h>
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+static char root_certs[84] = "/etc/ssl/certs/ca-certificates.crt"; /* Path on Debian */
+#endif
+
 /*! \brief Default Asterisk Manager Interface port is 5038 */
-#define AMI_PORT 5038
+#define AMI_PORT_UNENCRYPTED 5038
+#define AMI_PORT_ENCRYPTED 5039
 /*! \brief This is the finale to any message exchange. */
 #define AMI_EOM "\r\n\r\n"
 
@@ -60,7 +69,7 @@
 }
 
 #define ami_warning(ami, fmt, ...) ami_debug(ami, 1, "WARNING: " fmt, ## __VA_ARGS__)
-#define ami_error(ami, fmt, ...) ami_debug(ami, 1, "WARNING: " fmt, ## __VA_ARGS__)
+#define ami_error(ami, fmt, ...) ami_debug(ami, 1, "ERROR: " fmt, ## __VA_ARGS__)
 
 #define strlen_zero(s) ((!s || *s == '\0'))
 #define ltrim(s) while (isspace(*s)) s++;
@@ -81,6 +90,9 @@ struct ami_session {
 	struct ami_response *current_response;
 	int ami_rfd;			/* Read file descriptor (typically socket fd) */
 	int ami_wfd;			/* Write file descriptor (typically socket fd) */
+#ifdef HAVE_OPENSSL
+	SSL *ssl;
+#endif
 	int debugfd;
 	int debug_level;
 	int ami_pipe[2]; 		/* Pipe for sending actions to Asterisk */
@@ -157,6 +169,13 @@ static void ami_cleanup(struct ami_session *ami)
 		ami->ami_wfd = -1;
 	}
 
+#ifdef HAVE_OPENSSL
+	if (ami->ssl) {
+		SSL_shutdown(ami->ssl);
+		SSL_free(ami->ssl);
+	}
+#endif
+
 	ami->loggedin = 0;
 	ami->tx = ami->rx = 0;
 	if (ami->current_response) {
@@ -164,6 +183,91 @@ static void ami_cleanup(struct ami_session *ami)
 		ami->current_response = NULL;
 	}
 }
+
+#ifdef HAVE_OPENSSL
+static int start_tls(struct ami_session *ami, const char *hostname)
+{
+	SSL_CTX *ctx;
+	X509 *server_cert;
+	long verify_result;
+	char *str;
+
+	OpenSSL_add_ssl_algorithms();
+	SSL_load_error_strings();
+
+	ctx = SSL_CTX_new(TLS_client_method());
+	if (!ctx) {
+		ami_error(ami, "Failed to setup new SSL context\n");
+		return -1;
+	}
+
+	ami->ssl = SSL_new(ctx);
+	if (!ami->ssl) {
+		ami_error(ami, "Failed to create new SSL\n");
+		SSL_CTX_free(ctx);
+		return -1;
+	}
+
+	if (SSL_set_fd(ami->ssl, ami->ami_rfd) != 1) {
+		ami_error(ami, "Failed to connect SSL: %s\n", ERR_error_string(ERR_get_error(), NULL));
+		goto sslcleanup;
+	}
+
+	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+	SSL_CTX_set_verify_depth(ctx, 4);
+	if (SSL_CTX_load_verify_locations(ctx, root_certs, NULL) != 1) {
+		ami_error(ami, "Failed to load root certs from %s: %s\n", root_certs, ERR_error_string(ERR_get_error(), NULL));
+		goto sslcleanup;
+	}
+
+	/* SNI */
+	if (SSL_set_tlsext_host_name(ami->ssl, hostname) != 1) {
+		ami_warning(ami, "Failed to set SNI for TLS connection\n");
+	}
+
+	if (SSL_connect(ami->ssl) == -1) {
+		ami_error(ami, "Failed to connect SSL: %s\n", ERR_error_string(ERR_get_error(), NULL));
+	}
+
+	/* Verify cert */
+#if defined(OPENSSL_VERSION_MAJOR) && OPENSSL_VERSION_MAJOR >= 3
+	server_cert = SSL_get1_peer_certificate(ami->ssl);
+#else
+	server_cert = SSL_get_peer_certificate(ami->ssl);
+#endif
+	if (!server_cert) {
+		ami_error(ami, "Failed to get peer certificate\n");
+		goto sslcleanup;
+	}
+	str = X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
+	if (!str) {
+		ami_error(ami, "Failed to get peer certificate\n");
+		goto sslcleanup;
+	}
+	OPENSSL_free(str);
+	str = X509_NAME_oneline(X509_get_issuer_name(server_cert), 0, 0);
+	if (!str) {
+		ami_error(ami, "Failed to get peer certificate\n");
+		goto sslcleanup;
+	}
+	OPENSSL_free(str);
+	X509_free(server_cert);
+	verify_result = SSL_get_verify_result(ami->ssl);
+	if (verify_result != X509_V_OK) {
+		ami_warning(ami, "SSL verify failed: %ld (%s)\n", verify_result, X509_verify_cert_error_string(verify_result));
+		goto sslcleanup;
+	}
+
+	SSL_CTX_free(ctx); /* ctx will still have a ref count of 1 after this, to be cleaned up in ssl_close by SSL_free */
+	return 0;
+
+sslcleanup:
+	SSL_CTX_free(ctx);
+	SSL_free(ami->ssl);
+	ami->ssl = NULL;
+	return -1;
+}
+#endif /* HAVE_OPENSSL */
 
 static void *ami_loop(void *varg)
 {
@@ -200,6 +304,11 @@ static void *ami_loop(void *varg)
 		}
 		/* Data from AMI to deliver to consumer? */
 		if (fds[0].revents) {
+#ifdef HAVE_OPENSSL
+			if (ami->ssl) {
+				res = SSL_read(ami->ssl, readinbuf, AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf));
+			} else
+#endif
 			res = read(ami->ami_rfd, readinbuf, AMI_BUFFER_SIZE - 2 - (readinbuf - inbuf));
 			if (res < 1) {
 				if (res < 0) {
@@ -356,6 +465,11 @@ static void *ami_loop(void *varg)
 				ami_debug(ami, 1, "read returned %d\n", res);
 				break;
 			}
+#ifdef HAVE_OPENSSL
+			if (ami->ssl) {
+				res = SSL_write(ami->ssl, outbuf, res);
+			} else
+#endif
 			res = write(ami->ami_wfd, outbuf, res);
 			if (res < 1) {
 				ami_warning(ami, "write(%d) returned %d: %s\n", ami->ami_wfd, res, strerror(errno));
@@ -450,7 +564,7 @@ struct ami_session *ami_session_from_fd(int rfd, int wfd, void (*callback)(struc
 	return ami;
 }
 
-struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
+static struct ami_session *_ami_connect(const char *hostname, int port, int tls, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
 {
 	int fd;
 	struct sockaddr_in saddr;
@@ -463,10 +577,10 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 
 	memset(&saddr, 0, sizeof(saddr));
 	if (!port) {
-		port = AMI_PORT;
+		port = tls ? AMI_PORT_ENCRYPTED : AMI_PORT_UNENCRYPTED;
 	}
 
-	ami_debug(ami, 1, "Initiating AMI connection on port %d\n", port);
+	ami_debug(ami, 1, "Initiating AMI connection to %s://%s:%d\n", tls ? "tls" : "tcp", hostname, port);
 
 	fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -519,7 +633,6 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 				ami_cleanup(ami);
 				goto cleanup;
 			}
-
 			freeaddrinfo(res);
 		} else {
 			ami_error(ami, "host %s not valid\n", hostname);
@@ -530,6 +643,16 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 
 	ami->ami_callback = callback;
 	ami->disconnected_callback = dis_callback;
+
+#ifdef HAVE_OPENSSL
+	/* Need to start SSL before launching threads and such */
+	if (tls && start_tls(ami, hostname)) {
+		ami_error(ami, "Failed to set up TLS\n");
+		ami_cleanup(ami);
+		goto cleanup;
+	}
+#endif
+
 	if (common_init(ami)) {
 		ami_cleanup(ami);
 		goto cleanup;
@@ -540,6 +663,21 @@ struct ami_session *ami_connect(const char *hostname, int port, void (*callback)
 cleanup:
 	ami_destroy(ami);
 	return NULL;
+}
+
+struct ami_session *ami_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
+{
+	return _ami_connect(hostname, port, 0, callback, dis_callback);
+}
+
+struct ami_session *ami_ssl_connect(const char *hostname, int port, void (*callback)(struct ami_session *ami, struct ami_event *event), void (*dis_callback)(struct ami_session *ami))
+{
+#ifdef HAVE_OPENSSL
+	return _ami_connect(hostname, port, 1, callback, dis_callback);
+#else
+	errno = EPROTONOSUPPORT;
+	return NULL;
+#endif
 }
 
 void ami_set_callback_data(struct ami_session *ami, void *data)
